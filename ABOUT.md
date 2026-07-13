@@ -117,11 +117,11 @@ It's like CLIProxyAPI, but specifically built for agy with a focus on simplicity
 
 ### Case 1: HackTheBox Challenge (3+ hours)
 ```
-Hour 0-1.5: Account 1 (yakisec@gmail.com) - initial exploration
+Hour 0-1.5: Account 1 (your-account-1@gmail.com) - initial exploration
 Hour 1.5: Hit quota → Auto-rotate
-Hour 1.5-3: Account 2 (kirucianaz@gmail.com) - deep work
+Hour 1.5-3: Account 2 (your-account-2@gmail.com) - deep work
 Hour 3: Hit quota → Auto-rotate  
-Hour 3-4.5: Account 3 (groksec@gmail.com) - final push
+Hour 3-4.5: Account 3 (your-account-3@gmail.com) - final push
 ✓ Complete challenge without interruption
 ```
 
