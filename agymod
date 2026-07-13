@@ -304,10 +304,28 @@ run_agy() {
   echo -e "${BLUE}[agymod]${NC} Using account: ${CYAN}$email${NC} (${YELLOW}$((current + 1))/$total${NC})"
   echo ""
 
+  # Parse arguments
+  local skip_perms=false
+  local agy_args=()
+
+  for arg in "$@"; do
+    if [ "$arg" = "--dangerously-skip-permissions" ]; then
+      skip_perms=true
+    else
+      agy_args+=("$arg")
+    fi
+  done
+
+  # Build agy command
+  local agy_cmd="agy"
+  if [ "$skip_perms" = true ]; then
+    agy_cmd="$agy_cmd --dangerously-skip-permissions"
+  fi
+
   # Run agy
-  if [ -z "$@" ]; then
+  if [ ${#agy_args[@]} -eq 0 ]; then
     # Interactive mode
-    agy --dangerously-skip-permissions
+    eval "$agy_cmd"
 
     # After agy exits, ask about quota
     echo ""
@@ -338,7 +356,7 @@ run_agy() {
     fi
   else
     # Non-interactive mode with prompt
-    agy --dangerously-skip-permissions "$@"
+    eval "$agy_cmd ${agy_args[@]}"
   fi
 }
 
