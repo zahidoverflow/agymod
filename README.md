@@ -13,16 +13,36 @@ A multi-account manager for **Antigravity CLI (agy)** with automatic quota rotat
 
 ## Installation
 
+### Quick Install (One-liner)
+
 ```bash
-# Clone or download agymod
-git clone <your-github-repo> agymod
+curl -fsSL https://raw.githubusercontent.com/zahidoverflow/agymod/main/agymod -o agymod && chmod +x agymod && sudo mv agymod /usr/local/bin/
+```
+
+Or with sudo for direct installation:
+
+```bash
+sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/zahidoverflow/agymod/main/agymod -o /usr/local/bin/agymod && chmod +x /usr/local/bin/agymod'
+```
+
+### Manual Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/zahidoverflow/agymod.git
 cd agymod
 
 # Make executable
 chmod +x agymod
 
-# Add to PATH (optional)
+# Install to PATH
 sudo cp agymod /usr/local/bin/
+```
+
+### Verify Installation
+
+```bash
+agymod --help
 ```
 
 ## Quick Start
