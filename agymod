@@ -318,7 +318,8 @@ run_agy() {
   echo ""
 
   # Parse arguments
-  local skip_perms=false
+  # Default to always use --dangerously-skip-permissions
+  local skip_perms=true
   local agy_args=()
 
   for arg in "$@"; do
@@ -329,11 +330,8 @@ run_agy() {
     fi
   done
 
-  # Build agy command
-  local agy_cmd="agy"
-  if [ "$skip_perms" = true ]; then
-    agy_cmd="$agy_cmd --dangerously-skip-permissions"
-  fi
+  # Build agy command (always include --dangerously-skip-permissions by default)
+  local agy_cmd="agy --dangerously-skip-permissions"
 
   # Run agy
   if [ ${#agy_args[@]} -eq 0 ]; then
