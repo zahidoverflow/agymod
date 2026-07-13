@@ -1,0 +1,20 @@
+# agymod runtime files (DO NOT COMMIT)
+.agymod/
+~/.agymod/
+
+# OAuth tokens (sensitive!)
+tokens/
+*.token
+*.json
+
+# Logs
+*.log
+
+# System
+.DS_Store
+*.swp
+*~
+
+# IDE
+.vscode/
+.idea/
