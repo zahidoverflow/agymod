@@ -284,7 +284,12 @@ run_agy() {
   local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
 
   if [ "$total" -eq 0 ]; then
-    echo -e "${RED}Error: No accounts configured. Run: agymod --add-account <email>${NC}"
+    echo -e "${RED}✗ Error: No accounts configured${NC}"
+    echo ""
+    echo "Setup agymod with one of your accounts:"
+    echo -e "  ${GREEN}agymod --add-account-auth your-email@gmail.com${NC}"
+    echo ""
+    show_help
     exit 1
   fi
 
@@ -293,7 +298,15 @@ run_agy() {
   local token_file=$(jq -r ".accounts[$current].token_file" "$ACCOUNTS_FILE")
 
   if [ ! -f "$token_file" ]; then
-    echo -e "${RED}Error: Current account not authenticated${NC}"
+    echo -e "${RED}✗ Error: Current account not authenticated${NC}"
+    echo ""
+    echo "Authenticate this account:"
+    echo -e "  ${GREEN}agymod --auth 0${NC}"
+    echo ""
+    echo "Or add a new account:"
+    echo -e "  ${GREEN}agymod --add-account-auth your-email@gmail.com${NC}"
+    echo ""
+    show_help
     exit 1
   fi
 
