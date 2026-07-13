@@ -251,6 +251,41 @@ MIT
 
 Pull requests welcome!
 
+## Open Source & Community
+
+**agymod is fully open source.** You're free to:
+
+✅ **Use it** - Clone, install, and use in any project (personal or commercial)  
+✅ **Modify it** - Fork and customize to your needs  
+✅ **Build on it** - Create derivatives, improvements, or extensions  
+✅ **Share it** - Help others by sharing your modifications back  
+
+### Build Your Own
+
+The entire source code is available in this repository. If you want to:
+- Add new features
+- Integrate with other CLI tools
+- Create variants for other AI platforms (Claude, OpenAI, etc.)
+- Adapt for different use cases
+
+Feel free to fork and build! The MIT license gives you complete freedom.
+
+### Contributing Back
+
+Found improvements? Have a better approach? Pull requests welcome! 
+
+Whether it's bug fixes, performance improvements, or new features, the community benefits when we share back.
+
+### Related Projects
+
+Interested in building similar tools? agymod is designed to be:
+- **Simple** - Easy to understand and modify (~200 lines of bash)
+- **Modular** - Can be adapted for other CLIs
+- **Extensible** - Base for building similar quota managers
+
+Use agymod as a reference or starting point for your own projects!
+
 ---
 
-Built for endless HackTheBox sessions 🎯
+Built for endless HackTheBox sessions 🎯  
+Open source • MIT License • Contributions welcome
