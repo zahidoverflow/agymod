@@ -425,9 +425,9 @@ INFO:
 
 EXAMPLES:
   # Quick setup (add + auth in one command)
-  $ agymod --add-account-auth yakisec@gmail.com
-  $ agymod --add-account-auth kirucianaz@gmail.com
-  $ agymod --add-account-auth groksec@gmail.com
+  $ agymod --add-account-auth your-email-1@gmail.com
+  $ agymod --add-account-auth your-email-2@gmail.com
+  $ agymod --add-account-auth your-email-3@gmail.com
 
   # Use it
   $ agymod                # Interactive session (auto-rotates on quota)
