@@ -49,9 +49,9 @@ agymod --help
 
 ### Setup (One command per account)
 ```bash
-agymod --add-account-auth your-email-1@gmail.com
-agymod --add-account-auth your-email-2@gmail.com
-agymod --add-account-auth your-email-3@gmail.com
+agymod --add-account-auth your-account-1@gmail.com
+agymod --add-account-auth your-account-2@gmail.com
+agymod --add-account-auth your-account-3@gmail.com
 ```
 
 Each command:
@@ -76,15 +76,15 @@ agymod --status
 
 ```bash
 $ agymod
-[agymod] Using account: your-email-1@gmail.com (1/3)
+[agymod] Using account: your-account-1@gmail.com (1/3)
 > hello
 
 Did you hit quota? (y/n)
 > y
 
 ⚠ QUOTA REACHED - AUTO-ROTATED
-Previous account: your-email-1@gmail.com
-New account: your-email-2@gmail.com
+Previous account: your-account-1@gmail.com
+New account: your-account-2@gmail.com
 
 To continue:
   agymod  # Use next account
@@ -133,23 +133,23 @@ agymod --help                       # Show this help
 
 ```bash
 # Setup 3 accounts
-$ agymod --add-account-auth your-email-1@gmail.com
-✓ Account added: your-email-1@gmail.com
-Authenticating: your-email-1@gmail.com
+$ agymod --add-account-auth your-account-1@gmail.com
+✓ Account added: your-account-1@gmail.com
+Authenticating: your-account-1@gmail.com
 [agy opens for OAuth login...]
-✓ Token saved for: your-email-1@gmail.com
+✓ Token saved for: your-account-1@gmail.com
 
-$ agymod --add-account-auth your-email-2@gmail.com
-✓ Account added: your-email-2@gmail.com
-Authenticating: your-email-2@gmail.com
+$ agymod --add-account-auth your-account-2@gmail.com
+✓ Account added: your-account-2@gmail.com
+Authenticating: your-account-2@gmail.com
 [agy opens for OAuth login...]
-✓ Token saved for: your-email-2@gmail.com
+✓ Token saved for: your-account-2@gmail.com
 
-$ agymod --add-account-auth your-email-3@gmail.com
-✓ Account added: your-email-3@gmail.com
-Authenticating: your-email-3@gmail.com
+$ agymod --add-account-auth your-account-3@gmail.com
+✓ Account added: your-account-3@gmail.com
+Authenticating: your-account-3@gmail.com
 [agy opens for OAuth login...]
-✓ Token saved for: your-email-3@gmail.com
+✓ Token saved for: your-account-3@gmail.com
 
 # Check setup
 $ agymod --status
@@ -163,9 +163,9 @@ Total rotations: 0
 
 === Configured Accounts ===
 
-  → 1. [✓] your-email-1@gmail.com
-    2. [✓] your-email-2@gmail.com
-    3. [✓] your-email-3@gmail.com
+  → 1. [✓] your-account-1@gmail.com
+    2. [✓] your-account-2@gmail.com
+    3. [✓] your-account-3@gmail.com
 
 Current: Account 1
 Rotations: 0
@@ -173,7 +173,7 @@ Rotations: 0
 
 # Use it
 $ agymod
-[agymod] Using account: your-email-1@gmail.com (1/3)
+[agymod] Using account: your-account-1@gmail.com (1/3)
 > solve this ctf challenge
 [response...]
 
@@ -181,15 +181,15 @@ Did you hit quota? (y/n)
 > y
 
 ⚠ QUOTA REACHED - AUTO-ROTATED
-Previous account: your-email-1@gmail.com
-New account: your-email-2@gmail.com
+Previous account: your-account-1@gmail.com
+New account: your-account-2@gmail.com
 
 To continue:
   agymod
 
 # Continue seamlessly
 $ agymod
-[agymod] Using account: your-email-2@gmail.com (2/3)
+[agymod] Using account: your-account-2@gmail.com (2/3)
 > continue with the challenge
 [response...]
 ```
