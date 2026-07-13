@@ -1,0 +1,458 @@
+#!/bin/bash
+# agymod - Multi-account Antigravity CLI proxy with automatic quota rotation
+# Manages multiple agy accounts and auto-switches when quota is reached
+# Usage: agymod [commands]
+
+set -e
+
+# Configuration
+PROXY_DIR="${HOME}/.agymod"
+ACCOUNTS_FILE="${PROXY_DIR}/accounts.json"
+STATE_FILE="${PROXY_DIR}/state.json"
+TOKENS_DIR="${PROXY_DIR}/tokens"
+LOG_FILE="${PROXY_DIR}/agymod.log"
+AGY_AUTH_FILE="${HOME}/.gemini/antigravity-cli/antigravity-oauth-token"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+NC='\033[0m'
+
+# Initialize directories
+mkdir -p "$PROXY_DIR" "$TOKENS_DIR"
+
+# Logging
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+  echo -e "${BLUE}[agymod]${NC} $*"
+}
+
+# Initialize state file
+init_state() {
+  if [ ! -f "$STATE_FILE" ]; then
+    cat > "$STATE_FILE" << 'EOF'
+{
+  "current_account": 0,
+  "total_accounts": 0,
+  "rotations": 0,
+  "conversation_id": ""
+}
+EOF
+  fi
+}
+
+# Initialize accounts
+init_accounts() {
+  if [ ! -f "$ACCOUNTS_FILE" ]; then
+    cat > "$ACCOUNTS_FILE" << 'EOF'
+{
+  "accounts": []
+}
+EOF
+  fi
+}
+
+# Add account only
+add_account() {
+  local email="$1"
+  if [ -z "$email" ]; then
+    echo -e "${RED}Error: Email required${NC}"
+    exit 1
+  fi
+
+  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+
+  # Add to accounts
+  jq ".accounts += [{\"email\": \"$email\", \"index\": $total, \"token_file\": \"${TOKENS_DIR}/${total}-token.json\"}]" "$ACCOUNTS_FILE" > "${ACCOUNTS_FILE}.tmp"
+  mv "${ACCOUNTS_FILE}.tmp" "$ACCOUNTS_FILE"
+
+  log "Added account: $email"
+  echo -e "${GREEN}✓ Account added: ${CYAN}$email${NC}"
+  echo ""
+  echo "To authenticate this account, run:"
+  echo -e "  ${CYAN}agymod --auth $total${NC}"
+}
+
+# Authenticate existing account
+auth_account() {
+  local index="$1"
+  if [ -z "$index" ]; then
+    echo -e "${RED}Error: Account index required${NC}"
+    exit 1
+  fi
+
+  local email=$(jq -r ".accounts[$index].email // \"\"" "$ACCOUNTS_FILE")
+  if [ -z "$email" ]; then
+    echo -e "${RED}Error: Account $index not found${NC}"
+    exit 1
+  fi
+
+  local token_file=$(jq -r ".accounts[$index].token_file" "$ACCOUNTS_FILE")
+
+  echo -e "${YELLOW}Authenticating: ${CYAN}$email${NC}"
+  echo ""
+  echo -e "${YELLOW}1. agy will open in browser for OAuth login${NC}"
+  echo -e "${YELLOW}2. Sign in with: ${CYAN}$email${NC}"
+  echo -e "${YELLOW}3. After login, close agy with ${CYAN}Ctrl+C${NC}"
+  echo ""
+
+  # Force fresh OAuth by temporarily removing the auth file
+  local backup_file="${AGY_AUTH_FILE}.backup"
+  if [ -f "$AGY_AUTH_FILE" ]; then
+    mv "$AGY_AUTH_FILE" "$backup_file"
+  fi
+
+  # Run agy to get the token (will prompt for fresh OAuth)
+  agy --dangerously-skip-permissions || true
+
+  # Save the token
+  if [ -f "$AGY_AUTH_FILE" ]; then
+    cp "$AGY_AUTH_FILE" "$token_file"
+    log "Saved token for account $index: $email"
+    echo -e "${GREEN}✓ Token saved for: ${CYAN}$email${NC}"
+  else
+    # Restore backup if auth didn't work
+    if [ -f "$backup_file" ]; then
+      mv "$backup_file" "$AGY_AUTH_FILE"
+    fi
+    echo -e "${RED}Error: Auth file not found${NC}"
+    exit 1
+  fi
+
+  # Clean up backup
+  rm -f "$backup_file"
+}
+
+# Add and authenticate account in one step
+add_account_auth() {
+  local email="$1"
+  if [ -z "$email" ]; then
+    echo -e "${RED}Error: Email required${NC}"
+    exit 1
+  fi
+
+  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+
+  # Add to accounts
+  jq ".accounts += [{\"email\": \"$email\", \"index\": $total, \"token_file\": \"${TOKENS_DIR}/${total}-token.json\"}]" "$ACCOUNTS_FILE" > "${ACCOUNTS_FILE}.tmp"
+  mv "${ACCOUNTS_FILE}.tmp" "$ACCOUNTS_FILE"
+
+  log "Added account: $email"
+  echo -e "${GREEN}✓ Account added: ${CYAN}$email${NC}"
+  echo ""
+
+  # Now authenticate
+  local token_file=$(jq -r ".accounts[$total].token_file" "$ACCOUNTS_FILE")
+
+  echo -e "${YELLOW}Authenticating: ${CYAN}$email${NC}"
+  echo ""
+  echo -e "${YELLOW}1. agy will open in browser for OAuth login${NC}"
+  echo -e "${YELLOW}2. Sign in with: ${CYAN}$email${NC}"
+  echo -e "${YELLOW}3. After login, close agy with ${CYAN}Ctrl+C${NC}"
+  echo ""
+
+  # Force fresh OAuth by temporarily removing the auth file
+  local backup_file="${AGY_AUTH_FILE}.backup"
+  if [ -f "$AGY_AUTH_FILE" ]; then
+    mv "$AGY_AUTH_FILE" "$backup_file"
+  fi
+
+  # Run agy to get the token (will prompt for fresh OAuth)
+  agy --dangerously-skip-permissions || true
+
+  # Save the token
+  if [ -f "$AGY_AUTH_FILE" ]; then
+    cp "$AGY_AUTH_FILE" "$token_file"
+    log "Saved token for account $total: $email"
+    echo -e "${GREEN}✓ Token saved for: ${CYAN}$email${NC}"
+  else
+    # Restore backup if auth didn't work
+    if [ -f "$backup_file" ]; then
+      mv "$backup_file" "$AGY_AUTH_FILE"
+    fi
+    echo -e "${RED}Error: Auth file not found${NC}"
+    exit 1
+  fi
+
+  # Clean up backup
+  rm -f "$backup_file"
+}
+
+# List accounts
+list_accounts() {
+  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+
+  if [ "$total" -eq 0 ]; then
+    echo -e "${YELLOW}No accounts configured${NC}"
+    return
+  fi
+
+  echo -e "${BLUE}=== Configured Accounts ===${NC}"
+  echo ""
+
+  local current=$(jq -r '.current_account // 0' "$STATE_FILE")
+
+  for i in $(seq 0 $((total - 1))); do
+    local email=$(jq -r ".accounts[$i].email" "$ACCOUNTS_FILE")
+    local token_file=$(jq -r ".accounts[$i].token_file" "$ACCOUNTS_FILE")
+    local marker=" "
+    local status="${RED}✗${NC}"
+
+    if [ "$i" -eq "$current" ]; then
+      marker="→"
+    fi
+
+    if [ -f "$token_file" ]; then
+      status="${GREEN}✓${NC}"
+    fi
+
+    printf "  ${marker} %d. [${status}] %s\n" $((i + 1)) "$email"
+  done
+
+  echo ""
+  echo -e "Current: ${CYAN}Account $((current + 1))${NC}"
+  echo -e "Rotations: ${YELLOW}$(jq -r '.rotations' "$STATE_FILE")${NC}"
+}
+
+# Switch to account
+switch_account() {
+  local index="$1"
+  if [ -z "$index" ]; then
+    echo -e "${RED}Error: Account index required${NC}"
+    exit 1
+  fi
+
+  index=$((index - 1))  # Convert to 0-based
+
+  local email=$(jq -r ".accounts[$index].email // \"\"" "$ACCOUNTS_FILE")
+  if [ -z "$email" ]; then
+    echo -e "${RED}Error: Account $index not found${NC}"
+    exit 1
+  fi
+
+  local token_file=$(jq -r ".accounts[$index].token_file" "$ACCOUNTS_FILE")
+
+  if [ ! -f "$token_file" ]; then
+    echo -e "${RED}Error: Account not authenticated. Run: agymod --auth $((index))${NC}"
+    exit 1
+  fi
+
+  # Swap token
+  cp "$token_file" "$AGY_AUTH_FILE"
+  jq ".current_account = $index" "$STATE_FILE" > "${STATE_FILE}.tmp"
+  mv "${STATE_FILE}.tmp" "$STATE_FILE"
+
+  log "Switched to account $index: $email"
+  echo -e "${GREEN}✓ Switched to: ${CYAN}$email${NC}"
+}
+
+# Rotate to next account
+rotate_account() {
+  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+
+  if [ "$total" -eq 0 ]; then
+    echo -e "${RED}Error: No accounts configured${NC}"
+    exit 1
+  fi
+
+  local current=$(jq -r '.current_account' "$STATE_FILE")
+  local next=$(( (current + 1) % total ))
+  local rotations=$(jq -r '.rotations' "$STATE_FILE")
+
+  jq ".current_account = $next | .rotations = $((rotations + 1))" "$STATE_FILE" > "${STATE_FILE}.tmp"
+  mv "${STATE_FILE}.tmp" "$STATE_FILE"
+
+  # Switch the token
+  local next_token=$(jq -r ".accounts[$next].token_file" "$ACCOUNTS_FILE")
+  cp "$next_token" "$AGY_AUTH_FILE"
+
+  log "Rotated to account $next (total: $((rotations + 1)))"
+}
+
+# Get current account info
+get_current_account() {
+  local current=$(jq -r '.current_account' "$STATE_FILE")
+  jq ".accounts[$current]" "$ACCOUNTS_FILE"
+}
+
+# Run agy with account
+run_agy() {
+  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+
+  if [ "$total" -eq 0 ]; then
+    echo -e "${RED}Error: No accounts configured. Run: agymod --add-account <email>${NC}"
+    exit 1
+  fi
+
+  local current=$(jq -r '.current_account' "$STATE_FILE")
+  local email=$(jq -r ".accounts[$current].email" "$ACCOUNTS_FILE")
+  local token_file=$(jq -r ".accounts[$current].token_file" "$ACCOUNTS_FILE")
+
+  if [ ! -f "$token_file" ]; then
+    echo -e "${RED}Error: Current account not authenticated${NC}"
+    exit 1
+  fi
+
+  # Ensure token is loaded
+  cp "$token_file" "$AGY_AUTH_FILE"
+
+  log "Running with account $current: $email"
+  echo -e "${BLUE}[agymod]${NC} Using account: ${CYAN}$email${NC} (${YELLOW}$((current + 1))/$total${NC})"
+  echo ""
+
+  # Run agy
+  if [ -z "$@" ]; then
+    # Interactive mode
+    agy --dangerously-skip-permissions
+
+    # After agy exits, ask about quota
+    echo ""
+    echo -e "${YELLOW}Did you hit quota? (y/n)${NC}"
+    read -p "> " hit_quota
+
+    if [[ "$hit_quota" =~ ^[Yy] ]]; then
+      if [ $((current + 1)) -lt $total ]; then
+        rotate_account
+        local next=$(jq -r '.current_account' "$STATE_FILE")
+        local next_email=$(jq -r ".accounts[$next].email" "$ACCOUNTS_FILE")
+
+        echo ""
+        echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${RED}⚠ QUOTA REACHED - AUTO-ROTATED${NC}"
+        echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+        echo "Previous account: ${MAGENTA}$email${NC}"
+        echo "New account: ${GREEN}$next_email${NC}"
+        echo ""
+        echo -e "${YELLOW}To continue:${NC}"
+        echo ""
+        echo -e "  ${GREEN}agymod${NC}  # Use next account"
+        echo ""
+      else
+        echo -e "${RED}✗ All $total accounts exhausted${NC}"
+      fi
+    fi
+  else
+    # Non-interactive mode with prompt
+    agy --dangerously-skip-permissions "$@"
+  fi
+}
+
+# Show status
+show_status() {
+  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+  local current=$(jq -r '.current_account' "$STATE_FILE")
+  local rotations=$(jq -r '.rotations' "$STATE_FILE")
+
+  echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
+  echo -e "${BLUE}  agymod Status${NC}"
+  echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
+  echo ""
+  echo "Total accounts: ${CYAN}$total${NC}"
+  echo "Current account: ${CYAN}$((current + 1))${NC}"
+  echo "Total rotations: ${YELLOW}$rotations${NC}"
+  echo ""
+
+  if [ "$total" -gt 0 ]; then
+    list_accounts
+  fi
+
+  echo ""
+  echo "Log: $LOG_FILE"
+  echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
+}
+
+# Show help
+show_help() {
+  cat << 'EOF'
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                    agymod - AGY Multi-Account Proxy                  ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+Usage: agymod [COMMAND]
+
+SETUP:
+  --add-account-auth <email>    Add account and authenticate (one command)
+  --add-account <email>         Add account only (authenticate later)
+  --auth <index>                Authenticate existing account (0-based index)
+  --switch <index>              Switch to account (1-based index)
+  --reset                       Reset all accounts and state
+
+USAGE:
+  agymod                   Start interactive session (auto-rotates on quota)
+  agymod <prompt>          Run single prompt
+
+INFO:
+  --status                      Show current status
+  --list                        List configured accounts
+  --logs                        View activity logs
+
+EXAMPLES:
+  # Quick setup (add + auth in one command)
+  $ agymod --add-account-auth yakisec@gmail.com
+  $ agymod --add-account-auth kirucianaz@gmail.com
+  $ agymod --add-account-auth groksec@gmail.com
+
+  # Use it
+  $ agymod                # Interactive session (auto-rotates on quota)
+  $ agymod "solve ctf"    # Single prompt
+
+  # Manual switch
+  $ agymod --switch 1     # Switch to account 1
+
+  # Check status
+  $ agymod --status       # Show all accounts and current one
+
+EOF
+}
+
+# Main
+main() {
+  init_state
+  init_accounts
+
+  case "${1:-}" in
+    --add-account-auth)
+      add_account_auth "$2"
+      ;;
+    --add-account)
+      add_account "$2"
+      ;;
+    --auth)
+      auth_account "$2"
+      ;;
+    --switch)
+      switch_account "$2"
+      ;;
+    --reset)
+      log "Resetting all state..."
+      rm -rf "$PROXY_DIR"
+      mkdir -p "$PROXY_DIR" "$TOKENS_DIR"
+      init_state
+      init_accounts
+      echo -e "${GREEN}✓ Reset complete${NC}"
+      ;;
+    --status)
+      show_status
+      ;;
+    --list)
+      list_accounts
+      ;;
+    --logs)
+      tail -f "$LOG_FILE"
+      ;;
+    --help|-h)
+      show_help
+      ;;
+    *)
+      run_agy "$@"
+      ;;
+  esac
+}
+
+main "$@"
