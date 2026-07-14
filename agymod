@@ -268,7 +268,7 @@ get_quota_reset_time() {
   return 0
 }
 
-# Interactive account selector with arrow keys
+# Interactive account selector - clean, simple number-based menu
 interactive_account_selector() {
   local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
 
@@ -283,12 +283,12 @@ interactive_account_selector() {
   # Collect account info
   local -a accounts
   local -a statuses
-  local max_email_len=0
+  local current=$(jq -r '.current_account // 0' "$STATE_FILE")
 
   for i in $(seq 0 $((total - 1))); do
     local email=$(jq -r ".accounts[$i].email" "$ACCOUNTS_FILE")
     local token_file=$(jq -r ".accounts[$i].token_file" "$ACCOUNTS_FILE")
-    local status="✗ Not auth"
+    local status="${RED}✗ Not auth${NC}"
 
     if [ -f "$token_file" ]; then
       status="${GREEN}✓ Ready${NC}"
@@ -296,74 +296,59 @@ interactive_account_selector() {
 
     accounts[$i]="$email"
     statuses[$i]="$status"
-
-    if [ ${#email} -gt $max_email_len ]; then
-      max_email_len=${#email}
-    fi
   done
 
-  # Display interactive menu
-  clear
-  echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║${NC}  ${BOLD}agymod - Select Account${NC}${BLUE}                          ║${NC}"
-  echo -e "${BLUE}║${NC}  Use ${CYAN}↑${NC}/${CYAN}↓${NC} to navigate, ${CYAN}ENTER${NC} to select${BLUE}              ║${NC}"
-  echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
+  # Display menu
   echo ""
+  echo -e "${BLUE}┌─ Select Account ─────────────────────────────────────────┐${NC}"
+  echo -e "${BLUE}│${NC}"
 
-  local selected=0
-  local current=$(jq -r '.current_account // 0' "$STATE_FILE")
-
-  # Simple selection loop (works in most shells)
-  show_menu() {
-    for i in $(seq 0 $((total - 1))); do
-      local email="${accounts[$i]}"
-      local status="${statuses[$i]}"
-      local marker="  "
-
-      if [ $i -eq $selected ]; then
-        marker="${CYAN}→${NC}"
-        echo -e "${marker} ${MAGENTA}[$(printf '%2d' $((i + 1)))]${NC} ${CYAN}${email}${NC}  ${status}"
-      else
-        marker="  "
-        if [ $i -eq $current ]; then
-          echo -e "${marker} ${BLUE}[$(printf '%2d' $((i + 1)))]${NC} ${email}  ${status}  (current)"
-        else
-          echo -e "${marker} ${BLUE}[$(printf '%2d' $((i + 1)))]${NC} ${email}  ${status}"
-        fi
-      fi
-    done
-  }
-
-  show_menu
-
-  echo ""
-  echo -e "${BLUE}Quick keys:${NC}"
   for i in $(seq 0 $((total - 1))); do
-    echo -e "  ${YELLOW}$((i + 1))${NC} - Select ${accounts[$i]}"
+    local email="${accounts[$i]}"
+    local status="${statuses[$i]}"
+    local current_marker=""
+
+    if [ $i -eq $current ]; then
+      current_marker=" ${YELLOW}(current)${NC}"
+    fi
+
+    echo -e "${BLUE}│${NC}  ${MAGENTA}$((i + 1))${NC} ${email}  ${status}${current_marker}"
   done
 
-  read -p "Select account (1-$total): " choice
+  echo -e "${BLUE}│${NC}"
+  echo -e "${BLUE}└──────────────────────────────────────────────────────────┘${NC}"
+  echo ""
 
-  if [[ $choice =~ ^[0-9]+$ ]] && [ $choice -ge 1 ] && [ $choice -le $total ]; then
-    selected=$((choice - 1))
-  else
-    echo -e "${RED}✗ Invalid selection${NC}"
+  # Get user choice
+  while true; do
+    read -p "Select account (1-$total): " choice
+
+    if [[ $choice =~ ^[0-9]+$ ]] && [ $choice -ge 1 ] && [ $choice -le $total ]; then
+      break
+    fi
+
+    echo -e "${RED}✗ Invalid input. Please enter a number between 1 and $total${NC}"
+  done
+
+  local selected=$((choice - 1))
+
+  # Validate token exists
+  local selected_email="${accounts[$selected]}"
+  local selected_token="${TOKENS_DIR}/$selected-token.json"
+
+  if [ ! -f "$selected_token" ]; then
+    echo -e "${RED}✗ Error: Account not authenticated${NC}"
+    echo ""
+    echo "Authenticate this account:"
+    echo -e "  ${GREEN}agymod --auth $selected${NC}"
     return 1
   fi
 
   # Switch to selected account
   jq ".current_account = $selected" "$STATE_FILE" > "${STATE_FILE}.tmp"
   mv "${STATE_FILE}.tmp" "$STATE_FILE"
-
-  local selected_email="${accounts[$selected]}"
-  local selected_token="${TOKENS_DIR}/$selected-token.json"
-
-  if [ ! -f "$selected_token" ]; then
-    echo -e "${RED}✗ Account not authenticated${NC}"
-    return 1
-  fi
-
   cp "$selected_token" "$AGY_AUTH_FILE"
+
   log "Selected account $selected: $selected_email"
 
   echo ""
