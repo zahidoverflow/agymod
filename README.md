@@ -95,8 +95,11 @@ agymod --add-account email@gmail.com
 # Authenticate existing account
 agymod --auth 0
 
-# Switch to specific account
+# Switch to specific account by index
 agymod --switch 1
+
+# Quick switch by email
+agymod --your-email@gmail.com
 
 # List all accounts
 agymod --list
@@ -135,7 +138,20 @@ agymod --help
 
 ## 💡 Usage Examples
 
-### Example 1: Long HackTheBox Challenge
+### Example 1: Quick Email-Based Switching
+
+```bash
+# Switch to specific account by email
+$ agymod --your-email-2@gmail.com
+✓ Switched to: your-email-2@gmail.com
+
+# Switch and run a prompt
+$ agymod --your-email-3@gmail.com "solve this challenge"
+[agymod] Using account: your-email-3@gmail.com (3/3)
+> solving challenge...
+```
+
+### Example 2: Long HackTheBox Challenge
 
 ```bash
 $ agymod
@@ -240,8 +256,9 @@ agymod stores everything locally:
 
 ```
 ~/.agymod/
-├── accounts.json          # Account registry
+├── accounts.json          # Account registry (auto-managed)
 ├── state.json            # Current state (account, rotations)
+├── sequence.json         # Account rotation order (customizable)
 ├── tokens/
 │   ├── 0-token.json      # Account 1 token
 │   ├── 1-token.json      # Account 2 token
@@ -250,6 +267,19 @@ agymod stores everything locally:
 ```
 
 **All tokens stay local.** Never uploaded anywhere.
+
+### Customize Account Rotation Order
+
+Edit `~/.agymod/sequence.json` to change which account logs in first during auto-rotation:
+
+```json
+{
+  "order": [0, 2, 1],
+  "description": "Account rotation order. Modify 'order' array to change login sequence. Example: [0, 2, 1] means account 0 first, then 2, then 1"
+}
+```
+
+This changes rotation from `[Account 1 → Account 2 → Account 3]` to `[Account 1 → Account 3 → Account 2]`.
 
 ---
 
