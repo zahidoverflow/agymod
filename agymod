@@ -246,6 +246,134 @@ list_accounts() {
   echo -e "Rotations: ${YELLOW}$(jq -r '.rotations' "$STATE_FILE")${NC}"
 }
 
+# Get quota reset time for account (requires agy to be run for token)
+get_quota_reset_time() {
+  local account_index="$1"
+  local email=$(jq -r ".accounts[$account_index].email" "$ACCOUNTS_FILE")
+  local token_file=$(jq -r ".accounts[$account_index].token_file" "$ACCOUNTS_FILE")
+
+  if [ ! -f "$token_file" ]; then
+    echo "Not authenticated"
+    return 1
+  fi
+
+  # Check last used time from logs
+  local last_used=$(grep "Running with account $account_index" "$LOG_FILE" 2>/dev/null | tail -1 | cut -d' ' -f2-)
+  if [ -z "$last_used" ]; then
+    echo "Never used"
+    return 1
+  fi
+
+  echo "$last_used"
+  return 0
+}
+
+# Interactive account selector with arrow keys
+interactive_account_selector() {
+  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+
+  if [ "$total" -eq 0 ]; then
+    echo -e "${RED}✗ No accounts configured${NC}"
+    echo ""
+    echo "Setup your first account:"
+    echo -e "  ${GREEN}agymod --add-account-auth your-email@gmail.com${NC}"
+    exit 1
+  fi
+
+  # Collect account info
+  local -a accounts
+  local -a statuses
+  local max_email_len=0
+
+  for i in $(seq 0 $((total - 1))); do
+    local email=$(jq -r ".accounts[$i].email" "$ACCOUNTS_FILE")
+    local token_file=$(jq -r ".accounts[$i].token_file" "$ACCOUNTS_FILE")
+    local status="✗ Not auth"
+
+    if [ -f "$token_file" ]; then
+      status="${GREEN}✓ Ready${NC}"
+    fi
+
+    accounts[$i]="$email"
+    statuses[$i]="$status"
+
+    if [ ${#email} -gt $max_email_len ]; then
+      max_email_len=${#email}
+    fi
+  done
+
+  # Display interactive menu
+  clear
+  echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║${NC}  ${BOLD}agymod - Select Account${NC}${BLUE}                          ║${NC}"
+  echo -e "${BLUE}║${NC}  Use ${CYAN}↑${NC}/${CYAN}↓${NC} to navigate, ${CYAN}ENTER${NC} to select${BLUE}              ║${NC}"
+  echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
+  echo ""
+
+  local selected=0
+  local current=$(jq -r '.current_account // 0' "$STATE_FILE")
+
+  # Simple selection loop (works in most shells)
+  show_menu() {
+    for i in $(seq 0 $((total - 1))); do
+      local email="${accounts[$i]}"
+      local status="${statuses[$i]}"
+      local marker="  "
+
+      if [ $i -eq $selected ]; then
+        marker="${CYAN}→${NC}"
+        echo -e "${marker} ${MAGENTA}[$(printf '%2d' $((i + 1)))]${NC} ${CYAN}${email}${NC}  ${status}"
+      else
+        marker="  "
+        if [ $i -eq $current ]; then
+          echo -e "${marker} ${BLUE}[$(printf '%2d' $((i + 1)))]${NC} ${email}  ${status}  (current)"
+        else
+          echo -e "${marker} ${BLUE}[$(printf '%2d' $((i + 1)))]${NC} ${email}  ${status}"
+        fi
+      fi
+    done
+  }
+
+  show_menu
+
+  echo ""
+  echo -e "${BLUE}Quick keys:${NC}"
+  for i in $(seq 0 $((total - 1))); do
+    echo -e "  ${YELLOW}$((i + 1))${NC} - Select ${accounts[$i]}"
+  done
+
+  read -p "Select account (1-$total): " choice
+
+  if [[ $choice =~ ^[0-9]+$ ]] && [ $choice -ge 1 ] && [ $choice -le $total ]; then
+    selected=$((choice - 1))
+  else
+    echo -e "${RED}✗ Invalid selection${NC}"
+    return 1
+  fi
+
+  # Switch to selected account
+  jq ".current_account = $selected" "$STATE_FILE" > "${STATE_FILE}.tmp"
+  mv "${STATE_FILE}.tmp" "$STATE_FILE"
+
+  local selected_email="${accounts[$selected]}"
+  local selected_token="${TOKENS_DIR}/$selected-token.json"
+
+  if [ ! -f "$selected_token" ]; then
+    echo -e "${RED}✗ Account not authenticated${NC}"
+    return 1
+  fi
+
+  cp "$selected_token" "$AGY_AUTH_FILE"
+  log "Selected account $selected: $selected_email"
+
+  echo ""
+  echo -e "${GREEN}✓ Using account: ${CYAN}$selected_email${NC} ($((selected + 1))/$total)${NC}"
+  echo ""
+
+  # Start agy
+  run_agy
+}
+
 # Switch to account
 switch_account() {
   local index="$1"
@@ -444,6 +572,7 @@ SETUP:
 USAGE:
   agymod                   Start interactive session (auto-rotates on quota)
   agymod <prompt>          Run single prompt
+  agymod --accounts        Interactive account selector (arrow keys)
 
 INFO:
   --status                      Show current status
@@ -511,6 +640,9 @@ main() {
       ;;
     --switch)
       switch_account "$2"
+      ;;
+    --accounts)
+      interactive_account_selector
       ;;
     --reset)
       log "Resetting all state..."
