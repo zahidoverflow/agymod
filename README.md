@@ -1,291 +1,457 @@
-# agymod - Antigravity CLI Multi-Account Proxy
+# agymod
 
-A multi-account manager for **Antigravity CLI (agy)** with automatic quota rotation. Switch between multiple Google accounts seamlessly and auto-rotate when quota limits are reached.
+> Multi-account Antigravity CLI manager with automatic quota rotation
 
-## Features
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Bash](https://img.shields.io/badge/Shell_Script-121011?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![GitHub](https://img.shields.io/badge/github-%23121011.svg?logo=github&logoColor=white)](https://github.com/zahidoverflow/agymod)
 
-✅ **Multiple Account Management** - Add and manage up to N Antigravity accounts  
-✅ **Token Isolation** - Each account's OAuth token stored separately  
-✅ **Auto-Rotation** - Automatically switch to next account when quota is hit  
-✅ **One-Command Setup** - Add and authenticate in a single command  
-✅ **Manual Control** - Switch accounts manually anytime  
-✅ **Activity Logging** - Track all account switches and rotations  
+**agymod** is a lightweight, open-source account manager for Antigravity CLI that automatically rotates between multiple Google accounts when quota limits are reached. Work uninterrupted through API rate limits with seamless account switching.
 
-## Installation
+---
 
-### Quick Install (One-liner)
+## 🎯 Problem
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/zahidoverflow/agymod/main/agymod -o agymod && chmod +x agymod && sudo mv agymod /usr/local/bin/
-```
+Antigravity CLI (agy) has a **~1.5 hour quota per Google account**. During extended work sessions:
+- ❌ You hit quota and work stops
+- ❌ Manual account switching breaks your workflow
+- ❌ Managing multiple accounts is tedious
+- ❌ Long sessions become impossible
 
-Or with sudo for direct installation:
+## ✅ Solution
 
+**agymod** provides:
+- ✅ Automatic account rotation on quota
+- ✅ One-command account setup
+- ✅ Seamless token management
+- ✅ Zero interruption to your workflow
+- ✅ Local-only token storage (no cloud)
+
+---
+
+## 🚀 Quick Start
+
+### Installation
+
+**One-liner installation:**
 ```bash
 sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/zahidoverflow/agymod/main/agymod -o /usr/local/bin/agymod && chmod +x /usr/local/bin/agymod'
 ```
 
-### Manual Installation
-
+**Or manually:**
 ```bash
-# Clone the repository
 git clone https://github.com/zahidoverflow/agymod.git
 cd agymod
-
-# Make executable
 chmod +x agymod
-
-# Install to PATH
 sudo cp agymod /usr/local/bin/
 ```
 
-### Verify Installation
+### Setup (2 minutes)
 
 ```bash
-agymod --help
+# Add your first account
+agymod --add-account-auth your-email-1@gmail.com
+
+# Add second account
+agymod --add-account-auth your-email-2@gmail.com
+
+# Add third account (optional)
+agymod --add-account-auth your-email-3@gmail.com
+
+# Verify setup
+agymod --status
 ```
 
-## Quick Start
+Each command handles both **adding AND authenticating** the account automatically.
 
-### Setup (One command per account)
-```bash
-agymod --add-account-auth your-account-1@gmail.com
-agymod --add-account-auth your-account-2@gmail.com
-agymod --add-account-auth your-account-3@gmail.com
-```
-
-Each command:
-1. Adds the account to the config
-2. Opens `agy` for OAuth authentication
-3. Saves the OAuth token securely
-
-### Use It
+### Start Using
 
 ```bash
 # Interactive session (auto-rotates on quota)
 agymod
 
-# Run single prompt
-agymod "solve this ctf challenge"
+# Run a single prompt
+agymod "solve this challenge"
 
-# Check status
+# When quota is hit, just say 'y' and it auto-switches!
+Did you hit quota? (y/n)
+> y
+✓ Auto-rotated to next account
+```
+
+---
+
+## 📚 Commands Reference
+
+### Account Management
+
+```bash
+# Add and authenticate account (one command)
+agymod --add-account-auth email@gmail.com
+
+# Add account only (authenticate later)
+agymod --add-account email@gmail.com
+
+# Authenticate existing account
+agymod --auth 0
+
+# Switch to specific account
+agymod --switch 1
+
+# List all accounts
+agymod --list
+
+# Full status
 agymod --status
 ```
 
-### When Quota is Hit
+### Usage
+
+```bash
+# Interactive session
+agymod
+
+# Non-interactive prompt
+agymod "your prompt here"
+
+# With explicit permission skip
+agymod --dangerously-skip-permissions
+
+# View activity logs
+agymod --logs
+```
+
+### Management
+
+```bash
+# Reset everything
+agymod --reset
+
+# Show help
+agymod --help
+```
+
+---
+
+## 💡 Usage Examples
+
+### Example 1: Long HackTheBox Challenge
 
 ```bash
 $ agymod
-[agymod] Using account: your-account-1@gmail.com (1/3)
-> hello
+[agymod] Using account: your-email-1@gmail.com (1/3)
+
+> solve this challenge...
+> deeper investigation...
+> trying different approach...
 
 Did you hit quota? (y/n)
 > y
 
 ⚠ QUOTA REACHED - AUTO-ROTATED
-Previous account: your-account-1@gmail.com
-New account: your-account-2@gmail.com
-
-To continue:
-  agymod  # Use next account
-```
-
-Simply run `agymod` again to continue with the next account!
-
-## Commands
-
-```bash
-# Setup
-agymod --add-account-auth <email>   # Add and authenticate account
-agymod --auth <index>               # Authenticate existing account
-agymod --add-account <email>        # Add account (auth later)
-
-# Usage
-agymod                              # Interactive session
-agymod <prompt>                     # Single prompt
-
-# Management
-agymod --switch <index>             # Switch to specific account (1-based)
-agymod --status                     # Show all accounts and current one
-agymod --list                       # List configured accounts
-agymod --logs                       # View activity log
-agymod --reset                      # Reset everything
-
-# Help
-agymod --help                       # Show this help
-```
-
-## How It Works
-
-1. **Token Storage**: Each account's OAuth token is stored in `~/.agymod/tokens/`
-2. **Token Swapping**: When you run `agymod`, it loads the current account's token
-3. **Auto-Rotation**: When quota is reached, the next account's token is loaded automatically
-4. **Isolation**: Each account remains completely isolated with its own quota
-
-## Config Location
-
-- **Main config**: `~/.agymod/`
-- **Accounts file**: `~/.agymod/accounts.json`
-- **OAuth tokens**: `~/.agymod/tokens/`
-- **Activity log**: `~/.agymod/agymod.log`
-
-## Example Workflow
-
-```bash
-# Setup 3 accounts
-$ agymod --add-account-auth your-account-1@gmail.com
-✓ Account added: your-account-1@gmail.com
-Authenticating: your-account-1@gmail.com
-[agy opens for OAuth login...]
-✓ Token saved for: your-account-1@gmail.com
-
-$ agymod --add-account-auth your-account-2@gmail.com
-✓ Account added: your-account-2@gmail.com
-Authenticating: your-account-2@gmail.com
-[agy opens for OAuth login...]
-✓ Token saved for: your-account-2@gmail.com
-
-$ agymod --add-account-auth your-account-3@gmail.com
-✓ Account added: your-account-3@gmail.com
-Authenticating: your-account-3@gmail.com
-[agy opens for OAuth login...]
-✓ Token saved for: your-account-3@gmail.com
-
-# Check setup
-$ agymod --status
-═══════════════════════════════════════════════════════════
-  agymod Status
-═══════════════════════════════════════════════════════════
-
-Total accounts: 3
-Current account: 1
-Total rotations: 0
-
-=== Configured Accounts ===
-
-  → 1. [✓] your-account-1@gmail.com
-    2. [✓] your-account-2@gmail.com
-    3. [✓] your-account-3@gmail.com
-
-Current: Account 1
-Rotations: 0
-═══════════════════════════════════════════════════════════
-
-# Use it
-$ agymod
-[agymod] Using account: your-account-1@gmail.com (1/3)
-> solve this ctf challenge
-[response...]
-
-Did you hit quota? (y/n)
-> y
-
-⚠ QUOTA REACHED - AUTO-ROTATED
-Previous account: your-account-1@gmail.com
-New account: your-account-2@gmail.com
+Previous account: your-email-1@gmail.com
+New account: your-email-2@gmail.com
 
 To continue:
   agymod
 
-# Continue seamlessly
 $ agymod
-[agymod] Using account: your-account-2@gmail.com (2/3)
-> continue with the challenge
-[response...]
+[agymod] Using account: your-email-2@gmail.com (2/3)
+> continue investigation...
 ```
 
-## Requirements
+### Example 2: Extended Debugging Session
 
-- **agy** (Antigravity CLI) - installed and in PATH
-- **bash** 4.0+
-- **jq** - for JSON parsing
-
-Install dependencies:
 ```bash
-# macOS
-brew install jq
+# Start debugging
+agymod "analyze this error..."
 
-# Ubuntu/Debian
-sudo apt-get install jq
+# Hit quota after 90 minutes
+> y
 
-# Fedora
-sudo dnf install jq
+# Automatically switches to next account
+# Continue without interruption
 ```
 
-## Security
+### Example 3: CTF Competition
 
-- OAuth tokens are stored locally in `~/.agymod/tokens/`
-- Tokens are only loaded when `agymod` is run
-- Each account is completely isolated
-- No tokens are logged or exposed
-
-**Keep `~/.agymod/` private!** Don't commit it to git.
-
-## Troubleshooting
-
-**Issue**: "agy not found"
 ```bash
-# Make sure agy is installed and in PATH
-which agy
+# Setup 5 accounts for maximum uptime
+for i in {1..5}; do
+  agymod --add-account-auth account-$i@gmail.com
+done
+
+# Work continuously through the competition
+agymod
+
+# Quota rotation happens automatically
+# 5 × 1.5 hours = 7.5 hours of continuous work
 ```
-
-**Issue**: "Token file not found"
-```bash
-# Re-authenticate the account
-agymod --auth 0  # 0-based index
-```
-
-**Issue**: "All accounts exhausted"
-```bash
-# Check quota reset time in agy output
-# Quotas reset every ~1.5 hours per account
-# Or add more accounts and authenticate them
-agymod --add-account-auth another-account@gmail.com
-```
-
-## License
-
-MIT
-
-## Contributing
-
-Pull requests welcome!
-
-## Open Source & Community
-
-**agymod is fully open source.** You're free to:
-
-✅ **Use it** - Clone, install, and use in any project (personal or commercial)  
-✅ **Modify it** - Fork and customize to your needs  
-✅ **Build on it** - Create derivatives, improvements, or extensions  
-✅ **Share it** - Help others by sharing your modifications back  
-
-### Build Your Own
-
-The entire source code is available in this repository. If you want to:
-- Add new features
-- Integrate with other CLI tools
-- Create variants for other AI platforms (Claude, OpenAI, etc.)
-- Adapt for different use cases
-
-Feel free to fork and build! The MIT license gives you complete freedom.
-
-### Contributing Back
-
-Found improvements? Have a better approach? Pull requests welcome! 
-
-Whether it's bug fixes, performance improvements, or new features, the community benefits when we share back.
-
-### Related Projects
-
-Interested in building similar tools? agymod is designed to be:
-- **Simple** - Easy to understand and modify (~200 lines of bash)
-- **Modular** - Can be adapted for other CLIs
-- **Extensible** - Base for building similar quota managers
-
-Use agymod as a reference or starting point for your own projects!
 
 ---
 
-Built for endless HackTheBox sessions 🎯  
-Open source • MIT License • Contributions welcome
+## 🔧 How It Works
+
+1. **Token Storage**: Each account's OAuth token is stored separately in `~/.agymod/tokens/`
+2. **Token Swapping**: When you run `agymod`, it loads the current account's token
+3. **Auto-Rotation**: When quota is hit and you confirm, the next account's token is loaded
+4. **Complete Isolation**: Each account has its own 1.5-hour quota
+
+```
+Account 1 Token ─┐
+Account 2 Token ─┼─→ [agymod] ─→ ~/.gemini/antigravity-cli/antigravity-oauth-token
+Account 3 Token ─┘
+                     ↓
+                    [agy]
+                     ↓
+                  Antigravity API
+```
+
+---
+
+## ⚙️ Requirements
+
+- **agy** - Antigravity CLI ([install here](https://antigravity.google/))
+- **bash** 4.0 or higher
+- **jq** - JSON processor
+
+### Install Dependencies
+
+**macOS:**
+```bash
+brew install jq
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install jq
+```
+
+**Fedora/RHEL:**
+```bash
+sudo dnf install jq
+```
+
+---
+
+## 📁 Configuration
+
+agymod stores everything locally:
+
+```
+~/.agymod/
+├── accounts.json          # Account registry
+├── state.json            # Current state (account, rotations)
+├── tokens/
+│   ├── 0-token.json      # Account 1 token
+│   ├── 1-token.json      # Account 2 token
+│   └── 2-token.json      # Account 3 token
+└── agymod.log            # Activity log
+```
+
+**All tokens stay local.** Never uploaded anywhere.
+
+---
+
+## 🔒 Security
+
+- ✅ **Local Storage**: Tokens stored only in `~/.agymod/`
+- ✅ **No Cloud Upload**: Your tokens never leave your machine
+- ✅ **No Logging**: OAuth credentials never logged
+- ✅ **Isolated Accounts**: Each account completely independent
+- ✅ **Permission Control**: `.agymod/` directory has restricted permissions (700)
+
+**Best Practices:**
+
+```bash
+# Keep .agymod directory private
+chmod 700 ~/.agymod/
+
+# Don't commit to git
+echo "~/.agymod/" >> ~/.gitignore
+
+# Treat like a password file
+# Only store on trusted machines
+```
+
+---
+
+## 🐛 Troubleshooting
+
+### "Error: No accounts configured"
+
+```bash
+# Setup your first account
+agymod --add-account-auth your-email@gmail.com
+```
+
+### "Error: Current account not authenticated"
+
+```bash
+# Re-authenticate the account
+agymod --auth 0
+```
+
+### "All accounts exhausted"
+
+Quota resets every ~1.5 hours per account. Either:
+- Wait for quotas to reset
+- Add more accounts with `--add-account-auth`
+
+### agy not found
+
+```bash
+# Ensure agy is installed and in PATH
+which agy
+agy --version
+```
+
+### jq not found
+
+```bash
+# Install jq (see Requirements section above)
+brew install jq  # macOS
+sudo apt install jq  # Ubuntu/Debian
+```
+
+---
+
+## 📊 Comparison with Alternatives
+
+| Feature | agymod | Manual Switching | CLIProxyAPI |
+|---------|--------|------------------|------------|
+| Automatic Rotation | ✅ | ❌ | ✅ |
+| Local Token Storage | ✅ | ✅ | ✅ |
+| Simple Setup | ✅ | ✅ | ❌ (complex) |
+| Works with agy directly | ✅ | ✅ | ❌ (OpenAI API only) |
+| Lightweight | ✅ | ✅ | ❌ (Go binary) |
+| No server needed | ✅ | ✅ | ❌ (requires server) |
+
+---
+
+## 📖 Documentation
+
+- **[ABOUT.md](ABOUT.md)** - Detailed use cases and philosophy
+- **[LICENSE](LICENSE)** - MIT License
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Areas to improve:
+
+- 🐛 Bug fixes
+- ⚡ Performance improvements
+- 📖 Documentation improvements
+- ✨ New features
+- 🧪 Test coverage
+
+**Steps:**
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes
+4. Test thoroughly
+5. Commit with clear messages
+6. Push to your fork
+7. Open a Pull Request
+
+---
+
+## 🎓 Learning from agymod
+
+**agymod** is designed as a learning reference:
+
+- **Simple**: ~250 lines of bash, easy to understand
+- **Self-contained**: Single file, no dependencies beyond bash/jq
+- **Well-commented**: Clear variable names and logic flow
+- **Open**: Modify and adapt freely under MIT license
+
+Perfect for learning:
+- Bash scripting patterns
+- OAuth token management
+- CLI tool design
+- JSON handling in bash
+
+---
+
+## 💬 Support
+
+**Found a bug?** [Open an issue](https://github.com/zahidoverflow/agymod/issues)
+
+**Have a feature request?** [Start a discussion](https://github.com/zahidoverflow/agymod/discussions)
+
+**Want to contribute?** See [Contributing](#-contributing) section above
+
+---
+
+## 📜 License
+
+MIT License - See [LICENSE](LICENSE) for details
+
+```
+Copyright (c) 2026 agymod contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files...
+```
+
+**You're free to:**
+- Use it personally and commercially
+- Modify and distribute
+- Create derivatives
+- Sublicense
+
+---
+
+## 🚀 Built With
+
+- **Bash** - Shell scripting
+- **jq** - JSON parsing
+- **agy** - Antigravity CLI integration
+
+---
+
+## 📈 Roadmap
+
+Future improvements under consideration:
+
+- [ ] Config file for customization
+- [ ] Quota expiration tracking
+- [ ] Conversation history preservation across rotations
+- [ ] Account alias support
+- [ ] Integration tests
+- [ ] Shell completion scripts (zsh/bash)
+
+---
+
+## 🌟 Why agymod?
+
+**Before agymod:**
+- ❌ Work for 90 minutes, then stuck
+- ❌ Manually logout/login
+- ❌ Break workflow constantly
+- ❌ Impossible for long sessions
+
+**With agymod:**
+- ✅ Just ask: "Did you hit quota?"
+- ✅ Say "y"
+- ✅ Continue working
+- ✅ Unlimited productivity
+
+---
+
+## 🎯 Perfect For
+
+- 🎯 **HackTheBox Labs** - Multi-hour challenges
+- 💻 **Extended Coding** - Marathon development sessions
+- 🔍 **CTF Competitions** - Time-sensitive challenges
+- 📚 **Research** - Deep work without interruption
+- 🚀 **Production** - Debugging without limits
+
+---
+
+**Made with ❤️ for builders who refuse to stop**
+
+[![Star on GitHub](https://img.shields.io/github/stars/zahidoverflow/agymod?style=social)](https://github.com/zahidoverflow/agymod)
+[![Follow on GitHub](https://img.shields.io/github/followers/zahidoverflow?style=social)](https://github.com/zahidoverflow)
