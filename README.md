@@ -12,7 +12,7 @@
 
 ## 🎯 Problem
 
-Antigravity CLI (agy) has a **~1.5 hour quota per Google account**. During extended work sessions:
+Antigravity CLI (agy) has a **5 hour quota per Google account**. During extended work sessions:
 - ❌ You hit quota and work stops
 - ❌ Manual account switching breaks your workflow
 - ❌ Managing multiple accounts is tedious
