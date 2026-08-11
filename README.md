@@ -33,17 +33,23 @@ Antigravity CLI (agy) has a **5 hour quota per Google account**. During extended
 
 ### Installation
 
-**One-liner installation:**
+**1. Userspace Installation (Recommended - No `sudo` / `su` required):**
+```bash
+mkdir -p ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/zahidoverflow/agymod/main/agymod -o ~/.local/bin/agymod && chmod +x ~/.local/bin/agymod
+```
+
+**2. Global Installation (Optional - Requires `sudo`):**
 ```bash
 sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/zahidoverflow/agymod/main/agymod -o /usr/local/bin/agymod && chmod +x /usr/local/bin/agymod'
 ```
 
-**Or manually:**
+**3. Manual Userspace Setup:**
 ```bash
 git clone https://github.com/zahidoverflow/agymod.git
 cd agymod
 chmod +x agymod
-sudo cp agymod /usr/local/bin/
+mkdir -p ~/.local/bin && cp agymod ~/.local/bin/
 ```
 
 ### Setup (2 minutes)
@@ -233,18 +239,23 @@ Account 3 Token ─┘
 
 ### Install Dependencies
 
-**macOS:**
+*Note: `agymod` automatically downloads static `jq` to `~/.local/bin/jq` if `jq` is not found on your system (no root/su required).*
+
+**Manual Userspace Installation (No `sudo`):**
 ```bash
+mkdir -p ~/.local/bin
+curl -sSL https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o ~/.local/bin/jq && chmod +x ~/.local/bin/jq
+```
+
+**Package Manager Installation (Optional):**
+```bash
+# macOS
 brew install jq
-```
 
-**Ubuntu/Debian:**
-```bash
+# Ubuntu/Debian
 sudo apt-get install jq
-```
 
-**Fedora/RHEL:**
-```bash
+# Fedora/RHEL
 sudo dnf install jq
 ```
 
@@ -338,9 +349,16 @@ agy --version
 
 ### jq not found
 
+`agymod` will automatically attempt to install static `jq` to `~/.local/bin/jq` (no `su` required).
+If you wish to install it manually:
+
 ```bash
-# Install jq (see Requirements section above)
-brew install jq  # macOS
+# Userspace (No sudo / su required):
+mkdir -p ~/.local/bin
+curl -sSL https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o ~/.local/bin/jq && chmod +x ~/.local/bin/jq
+
+# Or system package manager:
+brew install jq      # macOS
 sudo apt install jq  # Ubuntu/Debian
 ```
 
