@@ -23,6 +23,24 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m'
 
+# Ensure ~/.local/bin is in PATH for userspace binaries (agy, jq)
+export PATH="${HOME}/.local/bin:${PATH}"
+
+# Check dependencies
+check_deps() {
+  if ! command -v jq >/dev/null 2>&1; then
+    echo -e "${YELLOW}[agymod] Dependency 'jq' not found. Installing static jq to ~/.local/bin/jq (no su required)...${NC}"
+    mkdir -p "${HOME}/.local/bin"
+    if curl -sSL https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o "${HOME}/.local/bin/jq" 2>/dev/null; then
+      chmod +x "${HOME}/.local/bin/jq"
+      echo -e "${GREEN}✓ Installed static jq binary to ~/.local/bin/jq${NC}"
+    else
+      echo -e "${RED}✗ Error: Could not download jq. Please install jq or place binary in ~/.local/bin/jq${NC}"
+      exit 1
+    fi
+  fi
+}
+
 # Initialize directories
 mkdir -p "$PROXY_DIR" "$TOKENS_DIR"
 
@@ -589,6 +607,7 @@ EOF
 
 # Main
 main() {
+  check_deps
   init_state
   init_accounts
   init_sequence
