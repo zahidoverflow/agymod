@@ -31,18 +31,28 @@ check_deps() {
   if ! command -v jq >/dev/null 2>&1; then
     echo -e "${YELLOW}[agymod] Dependency 'jq' not found. Installing static jq to ~/.local/bin/jq (no su required)...${NC}"
     mkdir -p "${HOME}/.local/bin"
-    if curl -sSL https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o "${HOME}/.local/bin/jq" 2>/dev/null; then
+    local arch
+    case "$(uname -m)" in
+      x86_64|amd64) arch="linux-amd64" ;;
+      aarch64|arm64) arch="linux-arm64" ;;
+      armv7l|armhf) arch="linux-armhf" ;;
+      i386|i686) arch="linux-i386" ;;
+      *) arch="linux-amd64" ;;
+    esac
+    local jq_url="https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-${arch}"
+    if curl -sSL "$jq_url" -o "${HOME}/.local/bin/jq" 2>/dev/null && [ -s "${HOME}/.local/bin/jq" ]; then
       chmod +x "${HOME}/.local/bin/jq"
       echo -e "${GREEN}✓ Installed static jq binary to ~/.local/bin/jq${NC}"
     else
-      echo -e "${RED}✗ Error: Could not download jq. Please install jq or place binary in ~/.local/bin/jq${NC}"
+      echo -e "${RED}✗ Error: Could not download jq from ${jq_url}. Please install jq or place binary in ~/.local/bin/jq${NC}"
       exit 1
     fi
   fi
 }
 
-# Initialize directories
+# Initialize directories with secure permissions
 mkdir -p "$PROXY_DIR" "$TOKENS_DIR"
+chmod 700 "$PROXY_DIR" "$TOKENS_DIR" 2>/dev/null || true
 
 # Logging
 log() {
@@ -87,13 +97,17 @@ EOF
   fi
 }
 
-# Get account index by email
+# Get account index by email (returns 0-based index)
 get_account_index_by_email() {
   local email="$1"
-  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+  local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
+
+  if [ "$total" -eq 0 ]; then
+    return 1
+  fi
 
   for i in $(seq 0 $((total - 1))); do
-    local acc_email=$(jq -r ".accounts[$i].email" "$ACCOUNTS_FILE")
+    local acc_email=$(jq -r ".accounts[$i].email // \"\"" "$ACCOUNTS_FILE")
     if [ "$acc_email" = "$email" ]; then
       echo "$i"
       return 0
@@ -110,43 +124,64 @@ add_account() {
     exit 1
   fi
 
-  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+  local existing_idx
+  if existing_idx=$(get_account_index_by_email "$email" 2>/dev/null); then
+    echo -e "${YELLOW}⚠ Account already exists: ${CYAN}$email${NC} (Account $((existing_idx + 1)))"
+    echo "To authenticate this account, run:"
+    echo -e "  ${CYAN}agymod --auth $((existing_idx + 1))${NC}"
+    return 0
+  fi
+
+  local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
 
   # Add to accounts
   jq ".accounts += [{\"email\": \"$email\", \"index\": $total, \"token_file\": \"${TOKENS_DIR}/${total}-token.json\"}]" "$ACCOUNTS_FILE" > "${ACCOUNTS_FILE}.tmp"
   mv "${ACCOUNTS_FILE}.tmp" "$ACCOUNTS_FILE"
 
   log "Added account: $email"
-  echo -e "${GREEN}✓ Account added: ${CYAN}$email${NC}"
+  echo -e "${GREEN}✓ Account added: ${CYAN}$email${NC} (Account $((total + 1)))"
   echo ""
   echo "To authenticate this account, run:"
-  echo -e "  ${CYAN}agymod --auth $total${NC}"
+  echo -e "  ${CYAN}agymod --auth $((total + 1))${NC}"
 }
 
-# Authenticate existing account
+# Authenticate existing account (1-based index)
 auth_account() {
-  local index="$1"
-  if [ -z "$index" ]; then
-    echo -e "${RED}Error: Account index required${NC}"
+  local input_idx="$1"
+  if [ -z "$input_idx" ]; then
+    echo -e "${RED}Error: Account index required (e.g. agymod --auth 1)${NC}"
+    exit 1
+  fi
+
+  local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
+  local index
+
+  # Support 1-based indexing, with 0 supported for backwards compatibility
+  if [ "$input_idx" -eq 0 ] 2>/dev/null && [ "$total" -gt 0 ]; then
+    index=0
+  elif [ "$input_idx" -ge 1 ] 2>/dev/null && [ "$input_idx" -le "$total" ] 2>/dev/null; then
+    index=$((input_idx - 1))
+  else
+    echo -e "${RED}Error: Account $input_idx not found (Total accounts: $total)${NC}"
     exit 1
   fi
 
   local email=$(jq -r ".accounts[$index].email // \"\"" "$ACCOUNTS_FILE")
   if [ -z "$email" ]; then
-    echo -e "${RED}Error: Account $index not found${NC}"
+    echo -e "${RED}Error: Account $input_idx not found${NC}"
     exit 1
   fi
 
   local token_file=$(jq -r ".accounts[$index].token_file" "$ACCOUNTS_FILE")
 
-  echo -e "${YELLOW}Authenticating: ${CYAN}$email${NC}"
+  echo -e "${YELLOW}Authenticating: ${CYAN}$email${NC} (Account $((index + 1)))"
   echo ""
   echo -e "${YELLOW}1. agy will open in browser for OAuth login${NC}"
   echo -e "${YELLOW}2. Sign in with: ${CYAN}$email${NC}"
   echo -e "${YELLOW}3. After login, close agy with ${CYAN}Ctrl+C${NC}"
   echo ""
 
-  # Force fresh OAuth by temporarily removing the auth file
+  # Force fresh OAuth by temporarily moving the auth file
   local backup_file="${AGY_AUTH_FILE}.backup"
   if [ -f "$AGY_AUTH_FILE" ]; then
     mv "$AGY_AUTH_FILE" "$backup_file"
@@ -158,7 +193,8 @@ auth_account() {
   # Save the token
   if [ -f "$AGY_AUTH_FILE" ]; then
     cp "$AGY_AUTH_FILE" "$token_file"
-    log "Saved token for account $index: $email"
+    chmod 600 "$token_file" 2>/dev/null || true
+    log "Saved token for account $((index + 1)): $email"
     echo -e "${GREEN}✓ Token saved for: ${CYAN}$email${NC}"
   else
     # Restore backup if auth didn't work
@@ -181,56 +217,30 @@ add_account_auth() {
     exit 1
   fi
 
-  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+  local existing_idx
+  if existing_idx=$(get_account_index_by_email "$email" 2>/dev/null); then
+    echo -e "${YELLOW}⚠ Account already exists: ${CYAN}$email${NC} (Account $((existing_idx + 1)))"
+    auth_account "$((existing_idx + 1))"
+    return $?
+  fi
+
+  local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
 
   # Add to accounts
   jq ".accounts += [{\"email\": \"$email\", \"index\": $total, \"token_file\": \"${TOKENS_DIR}/${total}-token.json\"}]" "$ACCOUNTS_FILE" > "${ACCOUNTS_FILE}.tmp"
   mv "${ACCOUNTS_FILE}.tmp" "$ACCOUNTS_FILE"
 
   log "Added account: $email"
-  echo -e "${GREEN}✓ Account added: ${CYAN}$email${NC}"
+  echo -e "${GREEN}✓ Account added: ${CYAN}$email${NC} (Account $((total + 1)))"
   echo ""
 
-  # Now authenticate
-  local token_file=$(jq -r ".accounts[$total].token_file" "$ACCOUNTS_FILE")
-
-  echo -e "${YELLOW}Authenticating: ${CYAN}$email${NC}"
-  echo ""
-  echo -e "${YELLOW}1. agy will open in browser for OAuth login${NC}"
-  echo -e "${YELLOW}2. Sign in with: ${CYAN}$email${NC}"
-  echo -e "${YELLOW}3. After login, close agy with ${CYAN}Ctrl+C${NC}"
-  echo ""
-
-  # Force fresh OAuth by temporarily removing the auth file
-  local backup_file="${AGY_AUTH_FILE}.backup"
-  if [ -f "$AGY_AUTH_FILE" ]; then
-    mv "$AGY_AUTH_FILE" "$backup_file"
-  fi
-
-  # Run agy to get the token (will prompt for fresh OAuth)
-  agy --dangerously-skip-permissions || true
-
-  # Save the token
-  if [ -f "$AGY_AUTH_FILE" ]; then
-    cp "$AGY_AUTH_FILE" "$token_file"
-    log "Saved token for account $total: $email"
-    echo -e "${GREEN}✓ Token saved for: ${CYAN}$email${NC}"
-  else
-    # Restore backup if auth didn't work
-    if [ -f "$backup_file" ]; then
-      mv "$backup_file" "$AGY_AUTH_FILE"
-    fi
-    echo -e "${RED}Error: Auth file not found${NC}"
-    exit 1
-  fi
-
-  # Clean up backup
-  rm -f "$backup_file"
+  # Now authenticate (1-based index)
+  auth_account "$((total + 1))"
 }
 
 # List accounts
 list_accounts() {
-  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+  local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
 
   if [ "$total" -eq 0 ]; then
     echo -e "${YELLOW}No accounts configured${NC}"
@@ -243,8 +253,8 @@ list_accounts() {
   local current=$(jq -r '.current_account // 0' "$STATE_FILE")
 
   for i in $(seq 0 $((total - 1))); do
-    local email=$(jq -r ".accounts[$i].email" "$ACCOUNTS_FILE")
-    local token_file=$(jq -r ".accounts[$i].token_file" "$ACCOUNTS_FILE")
+    local email=$(jq -r ".accounts[$i].email // \"\"" "$ACCOUNTS_FILE")
+    local token_file=$(jq -r ".accounts[$i].token_file // \"\"" "$ACCOUNTS_FILE")
     local marker=" "
     local status="${RED}✗${NC}"
 
@@ -261,7 +271,7 @@ list_accounts() {
 
   echo ""
   echo -e "Current: ${CYAN}Account $((current + 1))${NC}"
-  echo -e "Rotations: ${YELLOW}$(jq -r '.rotations' "$STATE_FILE")${NC}"
+  echo -e "Rotations: ${YELLOW}$(jq -r '.rotations // 0' "$STATE_FILE")${NC}"
 }
 
 # Get quota reset time for account (requires agy to be run for token)
@@ -288,15 +298,7 @@ get_quota_reset_time() {
 
 # Interactive account selector - clean, simple number-based menu
 interactive_account_selector() {
-  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
-
-  if [ "$total" -eq 0 ]; then
-    echo -e "${RED}✗ No accounts configured${NC}"
-    echo ""
-    echo "Setup your first account:"
-    echo -e "  ${GREEN}agymod --add-account-auth your-email@gmail.com${NC}"
-    exit 1
-  fi
+  local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
 
   # Collect account info
   local -a accounts
@@ -304,8 +306,8 @@ interactive_account_selector() {
   local current=$(jq -r '.current_account // 0' "$STATE_FILE")
 
   for i in $(seq 0 $((total - 1))); do
-    local email=$(jq -r ".accounts[$i].email" "$ACCOUNTS_FILE")
-    local token_file=$(jq -r ".accounts[$i].token_file" "$ACCOUNTS_FILE")
+    local email=$(jq -r ".accounts[$i].email // \"\"" "$ACCOUNTS_FILE")
+    local token_file=$(jq -r ".accounts[$i].token_file // \"\"" "$ACCOUNTS_FILE")
     local status="${RED}✗ Not auth${NC}"
 
     if [ -f "$token_file" ]; then
@@ -320,32 +322,71 @@ interactive_account_selector() {
   echo ""
   echo -e "${BLUE}┌─ Select Account ─────────────────────────────────────────┐${NC}"
   echo -e "${BLUE}│${NC}"
+  echo -e "${BLUE}│${NC}  ${GREEN}0${NC}  ${CYAN}[+] Add new account${NC}"
 
-  for i in $(seq 0 $((total - 1))); do
-    local email="${accounts[$i]}"
-    local status="${statuses[$i]}"
-    local current_marker=""
+  if [ "$total" -gt 0 ]; then
+    echo -e "${BLUE}│${NC}"
+    for i in $(seq 0 $((total - 1))); do
+      local email="${accounts[$i]}"
+      local status="${statuses[$i]}"
+      local current_marker=""
 
-    if [ $i -eq $current ]; then
-      current_marker=" ${YELLOW}(current)${NC}"
-    fi
+      if [ $i -eq $current ]; then
+        current_marker=" ${YELLOW}(current)${NC}"
+      fi
 
-    echo -e "${BLUE}│${NC}  ${MAGENTA}$((i + 1))${NC} ${email}  ${status}${current_marker}"
-  done
+      echo -e "${BLUE}│${NC}  ${MAGENTA}$((i + 1))${NC}  ${email}  ${status}${current_marker}"
+    done
+  else
+    echo -e "${BLUE}│${NC}"
+    echo -e "${BLUE}│${NC}  ${YELLOW}(No accounts configured yet)${NC}"
+  fi
 
   echo -e "${BLUE}│${NC}"
   echo -e "${BLUE}└──────────────────────────────────────────────────────────┘${NC}"
   echo ""
 
+  # Ensure valid current index
+  if [ "$current" -lt 0 ] 2>/dev/null || [ "$current" -ge "$total" ] 2>/dev/null; then
+    current=0
+  fi
+
   # Get user choice
   while true; do
-    read -p "Select account (1-$total): " choice
+    if [ "$total" -gt 0 ]; then
+      read -p "Select account (1-$total, default [$((current + 1))]) or 0 to add new: " choice
+    else
+      read -p "Select 0 (or '+') to add new account: " choice
+    fi
 
-    if [[ $choice =~ ^[0-9]+$ ]] && [ $choice -ge 1 ] && [ $choice -le $total ]; then
+    # Pressing Enter defaults to current account
+    if [ -z "$choice" ] && [ "$total" -gt 0 ]; then
+      choice=$((current + 1))
       break
     fi
 
-    echo -e "${RED}✗ Invalid input. Please enter a number between 1 and $total${NC}"
+    # Check for add account option (0, +, a, add)
+    if [ "$choice" = "0" ] || [ "$choice" = "+" ] || [ "$choice" = "a" ] || [ "$choice" = "add" ]; then
+      echo ""
+      read -p "Enter email address for new account: " new_email
+      if [ -n "$new_email" ]; then
+        add_account_auth "$new_email"
+        return $?
+      else
+        echo -e "${RED}✗ Error: Email cannot be empty${NC}"
+        return 1
+      fi
+    fi
+
+    if [ "$total" -gt 0 ] && [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$total" ]; then
+      break
+    fi
+
+    if [ "$total" -gt 0 ]; then
+      echo -e "${RED}✗ Invalid input. Please enter a number between 1 and $total (or press Enter for default), or 0 to add new${NC}"
+    else
+      echo -e "${RED}✗ Invalid input. Please enter 0 to add a new account${NC}"
+    fi
   done
 
   local selected=$((choice - 1))
@@ -358,7 +399,7 @@ interactive_account_selector() {
     echo -e "${RED}✗ Error: Account not authenticated${NC}"
     echo ""
     echo "Authenticate this account:"
-    echo -e "  ${GREEN}agymod --auth $selected${NC}"
+    echo -e "  ${GREEN}agymod --auth $((selected + 1))${NC}"
     return 1
   fi
 
@@ -366,6 +407,7 @@ interactive_account_selector() {
   jq ".current_account = $selected" "$STATE_FILE" > "${STATE_FILE}.tmp"
   mv "${STATE_FILE}.tmp" "$STATE_FILE"
   cp "$selected_token" "$AGY_AUTH_FILE"
+  chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
 
   log "Selected account $selected: $selected_email"
 
@@ -377,70 +419,109 @@ interactive_account_selector() {
   run_agy
 }
 
-# Switch to account
+# Switch to account (1-based index)
 switch_account() {
-  local index="$1"
-  if [ -z "$index" ]; then
-    echo -e "${RED}Error: Account index required${NC}"
+  local input_idx="$1"
+  if [ -z "$input_idx" ]; then
+    echo -e "${RED}Error: Account index required (e.g. agymod --switch 1)${NC}"
     exit 1
   fi
 
-  index=$((index - 1))  # Convert to 0-based
+  local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
+  if [ "$total" -eq 0 ]; then
+    echo -e "${RED}Error: No accounts configured${NC}"
+    exit 1
+  fi
+
+  if ! [[ "$input_idx" =~ ^[0-9]+$ ]] || [ "$input_idx" -lt 1 ] || [ "$input_idx" -gt "$total" ]; then
+    echo -e "${RED}Error: Invalid account index '$input_idx'. Choose between 1 and $total${NC}"
+    exit 1
+  fi
+
+  local index=$((input_idx - 1))  # Convert to 0-based
 
   local email=$(jq -r ".accounts[$index].email // \"\"" "$ACCOUNTS_FILE")
   if [ -z "$email" ]; then
-    echo -e "${RED}Error: Account $index not found${NC}"
+    echo -e "${RED}Error: Account $input_idx not found${NC}"
     exit 1
   fi
 
   local token_file=$(jq -r ".accounts[$index].token_file" "$ACCOUNTS_FILE")
 
   if [ ! -f "$token_file" ]; then
-    echo -e "${RED}Error: Account not authenticated. Run: agymod --auth $((index))${NC}"
+    echo -e "${RED}Error: Account not authenticated. Run: agymod --auth $input_idx${NC}"
     exit 1
   fi
 
   # Swap token
   cp "$token_file" "$AGY_AUTH_FILE"
+  chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
   jq ".current_account = $index" "$STATE_FILE" > "${STATE_FILE}.tmp"
   mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
   log "Switched to account $index: $email"
-  echo -e "${GREEN}✓ Switched to: ${CYAN}$email${NC}"
+  echo -e "${GREEN}✓ Switched to: ${CYAN}$email${NC} (Account $input_idx)"
 }
 
 # Rotate to next account
 rotate_account() {
-  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+  local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
 
   if [ "$total" -eq 0 ]; then
     echo -e "${RED}Error: No accounts configured${NC}"
     exit 1
   fi
 
-  local current=$(jq -r '.current_account' "$STATE_FILE")
-  local next=$(( (current + 1) % total ))
-  local rotations=$(jq -r '.rotations' "$STATE_FILE")
+  local current=$(jq -r '.current_account // 0' "$STATE_FILE")
+  local next
+  local seq_len=$(jq '.order | length // 0' "$SEQUENCE_FILE" 2>/dev/null || echo 0)
+
+  if [ "$seq_len" -gt 0 ]; then
+    # Custom sequence configured in sequence.json
+    local current_pos=-1
+    for i in $(seq 0 $((seq_len - 1))); do
+      local seq_idx=$(jq -r ".order[$i]" "$SEQUENCE_FILE")
+      if [ "$seq_idx" -eq "$current" ]; then
+        current_pos=$i
+        break
+      fi
+    done
+
+    if [ "$current_pos" -ge 0 ]; then
+      local next_pos=$(( (current_pos + 1) % seq_len ))
+      next=$(jq -r ".order[$next_pos]" "$SEQUENCE_FILE")
+    else
+      next=$(jq -r ".order[0]" "$SEQUENCE_FILE")
+    fi
+  else
+    # Default linear rotation
+    next=$(( (current + 1) % total ))
+  fi
+
+  local rotations=$(jq -r '.rotations // 0' "$STATE_FILE")
 
   jq ".current_account = $next | .rotations = $((rotations + 1))" "$STATE_FILE" > "${STATE_FILE}.tmp"
   mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
   # Switch the token
   local next_token=$(jq -r ".accounts[$next].token_file" "$ACCOUNTS_FILE")
-  cp "$next_token" "$AGY_AUTH_FILE"
+  if [ -f "$next_token" ]; then
+    cp "$next_token" "$AGY_AUTH_FILE"
+    chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
+  fi
 
-  log "Rotated to account $next (total: $((rotations + 1)))"
+  log "Rotated to account $next (total rotations: $((rotations + 1)))"
 }
 
 # Get current account info
 get_current_account() {
-  local current=$(jq -r '.current_account' "$STATE_FILE")
+  local current=$(jq -r '.current_account // 0' "$STATE_FILE")
   jq ".accounts[$current]" "$ACCOUNTS_FILE"
 }
 
 # Run agy with account
 run_agy() {
-  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
+  local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
 
   if [ "$total" -eq 0 ]; then
     echo -e "${RED}✗ Error: No accounts configured${NC}"
@@ -452,15 +533,15 @@ run_agy() {
     exit 1
   fi
 
-  local current=$(jq -r '.current_account' "$STATE_FILE")
-  local email=$(jq -r ".accounts[$current].email" "$ACCOUNTS_FILE")
-  local token_file=$(jq -r ".accounts[$current].token_file" "$ACCOUNTS_FILE")
+  local current=$(jq -r '.current_account // 0' "$STATE_FILE")
+  local email=$(jq -r ".accounts[$current].email // \"\"" "$ACCOUNTS_FILE")
+  local token_file=$(jq -r ".accounts[$current].token_file // \"\"" "$ACCOUNTS_FILE")
 
   if [ ! -f "$token_file" ]; then
     echo -e "${RED}✗ Error: Current account not authenticated${NC}"
     echo ""
     echo "Authenticate this account:"
-    echo -e "  ${GREEN}agymod --auth 0${NC}"
+    echo -e "  ${GREEN}agymod --auth $((current + 1))${NC}"
     echo ""
     echo "Or add a new account:"
     echo -e "  ${GREEN}agymod --add-account-auth your-email@gmail.com${NC}"
@@ -471,31 +552,24 @@ run_agy() {
 
   # Ensure token is loaded
   cp "$token_file" "$AGY_AUTH_FILE"
+  chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
 
   log "Running with account $current: $email"
   echo -e "${BLUE}[agymod]${NC} Using account: ${CYAN}$email${NC} (${YELLOW}$((current + 1))/$total${NC})"
   echo ""
 
   # Parse arguments
-  # Default to always use --dangerously-skip-permissions
-  local skip_perms=true
   local agy_args=()
-
   for arg in "$@"; do
-    if [ "$arg" = "--dangerously-skip-permissions" ]; then
-      skip_perms=true
-    else
+    if [ "$arg" != "--dangerously-skip-permissions" ]; then
       agy_args+=("$arg")
     fi
   done
 
-  # Build agy command (always include --dangerously-skip-permissions by default)
-  local agy_cmd="agy --dangerously-skip-permissions"
-
-  # Run agy
+  # Run agy safely without eval
   if [ ${#agy_args[@]} -eq 0 ]; then
     # Interactive mode
-    eval "$agy_cmd"
+    agy --dangerously-skip-permissions || true
 
     # After agy exits, ask about quota
     echo ""
@@ -503,7 +577,7 @@ run_agy() {
     read -p "> " hit_quota
 
     if [[ "$hit_quota" =~ ^[Yy] ]]; then
-      if [ $((current + 1)) -lt $total ]; then
+      if [ "$total" -gt 1 ]; then
         rotate_account
         local next=$(jq -r '.current_account' "$STATE_FILE")
         local next_email=$(jq -r ".accounts[$next].email" "$ACCOUNTS_FILE")
@@ -514,27 +588,27 @@ run_agy() {
         echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo ""
         echo "Previous account: ${MAGENTA}$email${NC}"
-        echo "New account: ${GREEN}$next_email${NC}"
+        echo "New account:      ${GREEN}$next_email${NC} ($((next + 1))/$total)"
         echo ""
         echo -e "${YELLOW}To continue:${NC}"
         echo ""
         echo -e "  ${GREEN}agymod${NC}  # Use next account"
         echo ""
       else
-        echo -e "${RED}✗ All $total accounts exhausted${NC}"
+        echo -e "${RED}✗ Only 1 account configured. Add more accounts with --add-account-auth${NC}"
       fi
     fi
   else
     # Non-interactive mode with prompt
-    eval "$agy_cmd ${agy_args[@]}"
+    agy --dangerously-skip-permissions "${agy_args[@]}"
   fi
 }
 
 # Show status
 show_status() {
-  local total=$(jq '.accounts | length' "$ACCOUNTS_FILE")
-  local current=$(jq -r '.current_account' "$STATE_FILE")
-  local rotations=$(jq -r '.rotations' "$STATE_FILE")
+  local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
+  local current=$(jq -r '.current_account // 0' "$STATE_FILE")
+  local rotations=$(jq -r '.rotations // 0' "$STATE_FILE")
 
   echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
   echo -e "${BLUE}  agymod Status${NC}"
@@ -559,7 +633,7 @@ show_help() {
   cat << 'EOF'
 
 ╔═══════════════════════════════════════════════════════════════════════════╗
-║                    agymod - AGY Multi-Account Proxy                  ║
+║                    agymod - AGY Multi-Account Proxy                       ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 
 Usage: agymod [COMMAND]
@@ -567,7 +641,7 @@ Usage: agymod [COMMAND]
 SETUP:
   --add-account-auth <email>    Add account and authenticate (one command)
   --add-account <email>         Add account only (authenticate later)
-  --auth <index>                Authenticate existing account (0-based index)
+  --auth <index>                Authenticate existing account (1-based index)
   --switch <index>              Switch to account (1-based index)
   --<email>                     Quick switch to account by email
   --reset                       Reset all accounts and state
@@ -575,7 +649,7 @@ SETUP:
 USAGE:
   agymod                   Start interactive session (auto-rotates on quota)
   agymod <prompt>          Run single prompt
-  agymod --accounts        Interactive account selector (arrow keys)
+  agymod --accounts        Interactive account selector
 
 INFO:
   --status                      Show current status
@@ -592,7 +666,7 @@ EXAMPLES:
   $ agymod                # Interactive session (auto-rotates on quota)
   $ agymod "solve ctf"    # Single prompt
 
-  # Manual switch by index
+  # Manual switch by index (1-based)
   $ agymod --switch 1                    # Switch to account 1
 
   # Quick switch by email
@@ -652,8 +726,10 @@ main() {
       log "Resetting all state..."
       rm -rf "$PROXY_DIR"
       mkdir -p "$PROXY_DIR" "$TOKENS_DIR"
+      chmod 700 "$PROXY_DIR" "$TOKENS_DIR" 2>/dev/null || true
       init_state
       init_accounts
+      init_sequence
       echo -e "${GREEN}✓ Reset complete${NC}"
       ;;
     --status)
