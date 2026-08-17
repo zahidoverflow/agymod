@@ -98,8 +98,8 @@ agymod --add-account-auth email@gmail.com
 # Add account only (authenticate later)
 agymod --add-account email@gmail.com
 
-# Authenticate existing account
-agymod --auth 0
+# Authenticate existing account (1-based index)
+agymod --auth 1
 
 # Switch to specific account by index
 agymod --switch 1
@@ -330,7 +330,7 @@ agymod --add-account-auth your-email@gmail.com
 
 ```bash
 # Re-authenticate the account
-agymod --auth 0
+agymod --auth 1
 ```
 
 ### "All accounts exhausted"
