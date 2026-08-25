@@ -42,9 +42,9 @@ check_deps() {
     local jq_url="https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-${arch}"
     if curl -sSL "$jq_url" -o "${HOME}/.local/bin/jq" 2>/dev/null && [ -s "${HOME}/.local/bin/jq" ]; then
       chmod +x "${HOME}/.local/bin/jq"
-      echo -e "${GREEN}✓ Installed static jq binary to ~/.local/bin/jq${NC}"
+      echo -e "${GREEN}[OK] Installed static jq binary to ~/.local/bin/jq${NC}"
     else
-      echo -e "${RED}✗ Error: Could not download jq from ${jq_url}. Please install jq or place binary in ~/.local/bin/jq${NC}"
+      echo -e "${RED}[ERR] Could not download jq from ${jq_url}. Please install jq or place binary in ~/.local/bin/jq${NC}"
       exit 1
     fi
   fi
@@ -126,7 +126,7 @@ add_account() {
 
   local existing_idx
   if existing_idx=$(get_account_index_by_email "$email" 2>/dev/null); then
-    echo -e "${YELLOW}⚠ Account already exists: ${CYAN}$email${NC} (Account $((existing_idx + 1)))"
+    echo -e "${YELLOW}[!] Account already exists: ${CYAN}$email${NC} (Account $((existing_idx + 1)))"
     echo "To authenticate this account, run:"
     echo -e "  ${CYAN}agymod --auth $((existing_idx + 1))${NC}"
     return 0
@@ -139,7 +139,7 @@ add_account() {
   mv "${ACCOUNTS_FILE}.tmp" "$ACCOUNTS_FILE"
 
   log "Added account: $email"
-  echo -e "${GREEN}✓ Account added: ${CYAN}$email${NC} (Account $((total + 1)))"
+  echo -e "${GREEN}[+] Account added: ${CYAN}$email${NC} (Account $((total + 1)))"
   echo ""
   echo "To authenticate this account, run:"
   echo -e "  ${CYAN}agymod --auth $((total + 1))${NC}"
@@ -195,7 +195,7 @@ auth_account() {
     cp "$AGY_AUTH_FILE" "$token_file"
     chmod 600 "$token_file" 2>/dev/null || true
     log "Saved token for account $((index + 1)): $email"
-    echo -e "${GREEN}✓ Token saved for: ${CYAN}$email${NC}"
+    echo -e "${GREEN}[OK] Token saved for: ${CYAN}$email${NC}"
   else
     # Restore backup if auth didn't work
     if [ -f "$backup_file" ]; then
@@ -219,7 +219,7 @@ add_account_auth() {
 
   local existing_idx
   if existing_idx=$(get_account_index_by_email "$email" 2>/dev/null); then
-    echo -e "${YELLOW}⚠ Account already exists: ${CYAN}$email${NC} (Account $((existing_idx + 1)))"
+    echo -e "${YELLOW}[!] Account already exists: ${CYAN}$email${NC} (Account $((existing_idx + 1)))"
     auth_account "$((existing_idx + 1))"
     return $?
   fi
@@ -231,7 +231,7 @@ add_account_auth() {
   mv "${ACCOUNTS_FILE}.tmp" "$ACCOUNTS_FILE"
 
   log "Added account: $email"
-  echo -e "${GREEN}✓ Account added: ${CYAN}$email${NC} (Account $((total + 1)))"
+  echo -e "${GREEN}[+] Account added: ${CYAN}$email${NC} (Account $((total + 1)))"
   echo ""
 
   # Now authenticate (1-based index)
@@ -323,7 +323,7 @@ remove_account() {
   fi
 
   log "Removed account: $email"
-  echo -e "${GREEN}✓ Account removed: ${CYAN}$email${NC}"
+  echo -e "${GREEN}[OK] Account removed: ${CYAN}$email${NC}"
 }
 
 # List accounts
@@ -344,14 +344,14 @@ list_accounts() {
     local email=$(jq -r ".accounts[$i].email // \"\"" "$ACCOUNTS_FILE")
     local token_file=$(jq -r ".accounts[$i].token_file // \"\"" "$ACCOUNTS_FILE")
     local marker=" "
-    local status="${RED}✗${NC}"
+    local status="${RED}x${NC}"
 
     if [ "$i" -eq "$current" ]; then
-      marker="→"
+      marker=">"
     fi
 
     if [ -f "$token_file" ]; then
-      status="${GREEN}✓${NC}"
+      status="${GREEN}*${NC}"
     fi
 
     printf "  ${marker} %2d. [${status}] %s\n" $((i + 1)) "$email"
@@ -396,10 +396,10 @@ interactive_account_selector() {
   for i in $(seq 0 $((total - 1))); do
     local email=$(jq -r ".accounts[$i].email // \"\"" "$ACCOUNTS_FILE")
     local token_file=$(jq -r ".accounts[$i].token_file // \"\"" "$ACCOUNTS_FILE")
-    local status="${RED}✗ Not auth${NC}"
+    local status="${RED}x Not auth${NC}"
 
     if [ -f "$token_file" ]; then
-      status="${GREEN}✓ Ready${NC}"
+      status="${GREEN}* Ready${NC}"
     fi
 
     accounts[$i]="$email"
@@ -466,7 +466,7 @@ interactive_account_selector() {
         add_account_auth "$new_email"
         return $?
       else
-        echo -e "${RED}✗ Error: Email cannot be empty${NC}"
+        echo -e "${RED}[ERR] Email cannot be empty${NC}"
         return 1
       fi
     fi
@@ -476,9 +476,9 @@ interactive_account_selector() {
     fi
 
     if [ "$total" -gt 0 ]; then
-      echo -e "${RED}✗ Invalid input. Please enter a number between 1 and $total (or press Enter for default), or 0 to add new${NC}"
+      echo -e "${RED}[ERR] Invalid. Enter a number between 1 and $total (or press Enter for default), or 0 to add new${NC}"
     else
-      echo -e "${RED}✗ Invalid input. Please enter 0 to add a new account${NC}"
+      echo -e "${RED}[ERR] Invalid. Enter 0 to add a new account${NC}"
     fi
   done
 
@@ -489,7 +489,7 @@ interactive_account_selector() {
   local selected_token="${TOKENS_DIR}/$selected-token.json"
 
   if [ ! -f "$selected_token" ]; then
-    echo -e "${RED}✗ Error: Account not authenticated${NC}"
+    echo -e "${RED}[ERR] Account not authenticated${NC}"
     echo ""
     echo "Authenticate this account:"
     echo -e "  ${GREEN}agymod --auth $((selected + 1))${NC}"
@@ -505,7 +505,7 @@ interactive_account_selector() {
   log "Selected account $selected: $selected_email"
 
   echo ""
-  echo -e "${GREEN}✓ Using account: ${CYAN}$selected_email${NC} ($((selected + 1))/$total)${NC}"
+  echo -e "${GREEN}[->] Using account: ${CYAN}$selected_email${NC} ($((selected + 1))/$total)${NC}"
   echo ""
 
   # Start agy
@@ -553,7 +553,7 @@ switch_account() {
   mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
   log "Switched to account $index: $email"
-  echo -e "${GREEN}✓ Switched to: ${CYAN}$email${NC} (Account $input_idx)"
+  echo -e "${GREEN}[->] Switched to: ${CYAN}$email${NC} (Account $input_idx)"
 }
 
 # Rotate to next account
@@ -617,7 +617,7 @@ run_agy() {
   local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
 
   if [ "$total" -eq 0 ]; then
-    echo -e "${RED}✗ Error: No accounts configured${NC}"
+    echo -e "${RED}[ERR] No accounts configured${NC}"
     echo ""
     echo "Setup agymod with one of your accounts:"
     echo -e "  ${GREEN}agymod --add-account-auth your-email@gmail.com${NC}"
@@ -631,7 +631,7 @@ run_agy() {
   local token_file=$(jq -r ".accounts[$current].token_file // \"\"" "$ACCOUNTS_FILE")
 
   if [ ! -f "$token_file" ]; then
-    echo -e "${RED}✗ Error: Current account not authenticated${NC}"
+    echo -e "${RED}[ERR] Current account not authenticated${NC}"
     echo ""
     echo "Authenticate this account:"
     echo -e "  ${GREEN}agymod --auth $((current + 1))${NC}"
@@ -664,12 +664,13 @@ run_agy() {
     # Interactive mode
     agy --dangerously-skip-permissions || true
 
-    # After agy exits, ask about quota
+    # After agy exits, ask about quota (Enter = yes)
     echo ""
-    echo -e "${YELLOW}Did you hit quota? (y/n)${NC}"
+    echo -e "${YELLOW}Did you hit quota? (Y/n)${NC}"
     read -p "> " hit_quota
 
-    if [[ "$hit_quota" =~ ^[Yy] ]]; then
+    # Default to y if Enter pressed (empty input)
+    if [ -z "$hit_quota" ] || [[ "$hit_quota" =~ ^[Yy] ]]; then
       if [ "$total" -gt 1 ]; then
         rotate_account
         local next=$(jq -r '.current_account' "$STATE_FILE")
@@ -677,18 +678,17 @@ run_agy() {
 
         echo ""
         echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${RED}⚠ QUOTA REACHED - AUTO-ROTATED${NC}"
+        echo -e "${RED}! QUOTA REACHED - AUTO-ROTATED${NC}"
         echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo ""
         echo -e "Previous account: ${MAGENTA}$email${NC}"
         echo -e "New account:      ${GREEN}$next_email${NC} ($((next + 1))/$total)"
         echo ""
-        echo -e "${YELLOW}To continue:${NC}"
-        echo ""
-        echo -e "  ${GREEN}agymod${NC}  # Use next account"
-        echo ""
+
+        # Auto-launch with next account
+        run_agy
       else
-        echo -e "${RED}✗ Only 1 account configured. Add more accounts with --add-account-auth${NC}"
+        echo -e "${RED}[!] Only 1 account configured. Add more accounts with --add-account-auth${NC}"
       fi
     fi
   else
@@ -787,12 +787,12 @@ main() {
       jq ".current_account = $account_index" "$STATE_FILE" > "${STATE_FILE}.tmp"
       mv "${STATE_FILE}.tmp" "$STATE_FILE"
       log "Switched to account $account_index: $email"
-      echo -e "${GREEN}✓ Switched to: ${CYAN}$email${NC}"
+      echo -e "${GREEN}[->] Switched to: ${CYAN}$email${NC}"
       shift
       run_agy "$@"
       return $?
     else
-      echo -e "${RED}✗ Error: Account not found: ${CYAN}$email${NC}"
+      echo -e "${RED}[ERR] Account not found: ${CYAN}$email${NC}"
       echo ""
       echo "Available accounts:"
       list_accounts
@@ -827,7 +827,7 @@ main() {
       init_state
       init_accounts
       init_sequence
-      echo -e "${GREEN}✓ Reset complete${NC}"
+      echo -e "${GREEN}[OK] Reset complete${NC}"
       ;;
     --status)
       show_status
