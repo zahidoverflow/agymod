@@ -238,6 +238,94 @@ add_account_auth() {
   auth_account "$((total + 1))"
 }
 
+# Remove account
+remove_account() {
+  local target="$1"
+  if [ -z "$target" ]; then
+    echo -e "${RED}Error: Account email or index required${NC}"
+    exit 1
+  fi
+
+  local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
+  if [ "$total" -eq 0 ]; then
+    echo -e "${RED}Error: No accounts configured${NC}"
+    exit 1
+  fi
+
+  local index=-1
+  # Check if target is a number (1-based index)
+  if [[ "$target" =~ ^[0-9]+$ ]] && [ "$target" -ge 1 ] && [ "$target" -le "$total" ]; then
+    index=$((target - 1))
+  else
+    # Otherwise check by email
+    index=$(get_account_index_by_email "$target" 2>/dev/null || echo -1)
+  fi
+
+  if [ "$index" -eq -1 ] || [ "$index" -ge "$total" ]; then
+    echo -e "${RED}Error: Account '$target' not found${NC}"
+    exit 1
+  fi
+
+  local email=$(jq -r ".accounts[$index].email" "$ACCOUNTS_FILE")
+  local token_file=$(jq -r ".accounts[$index].token_file" "$ACCOUNTS_FILE")
+
+  # 1. Delete target token file
+  if [ -f "$token_file" ]; then
+    rm -f "$token_file"
+    log "Deleted token file: $token_file"
+  fi
+
+  # 2. Shift token files for accounts after the deleted one
+  for ((i = index + 1; i < total; i++)); do
+    local old_token="${TOKENS_DIR}/${i}-token.json"
+    local new_token="${TOKENS_DIR}/$((i - 1))-token.json"
+    if [ -f "$old_token" ]; then
+      mv "$old_token" "$new_token"
+      log "Renamed token file: $old_token -> $new_token"
+    fi
+  done
+
+  # 3. Remove the account from accounts.json and update indices and token_file paths
+  jq --arg tokens_dir "$TOKENS_DIR" "del(.accounts[$index]) | .accounts = (.accounts | to_entries | map(.value.index = .key | .value.token_file = (\$tokens_dir + \"/\" + (.key|tostring) + \"-token.json\") | .value))" "$ACCOUNTS_FILE" > "${ACCOUNTS_FILE}.tmp"
+  mv "${ACCOUNTS_FILE}.tmp" "$ACCOUNTS_FILE"
+
+  # 4. Update current_account in state.json if needed
+  local current=$(jq -r '.current_account // 0' "$STATE_FILE")
+  local new_total=$((total - 1))
+  
+  if [ "$new_total" -eq 0 ]; then
+    jq ".current_account = 0 | .total_accounts = 0" "$STATE_FILE" > "${STATE_FILE}.tmp"
+    rm -f "$AGY_AUTH_FILE"
+  elif [ "$current" -eq "$index" ]; then
+    local new_current=0
+    jq ".current_account = $new_current" "$STATE_FILE" > "${STATE_FILE}.tmp"
+    local next_token="${TOKENS_DIR}/${new_current}-token.json"
+    if [ -f "$next_token" ]; then
+      cp "$next_token" "$AGY_AUTH_FILE"
+      chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
+    else
+      rm -f "$AGY_AUTH_FILE"
+    fi
+  elif [ "$current" -gt "$index" ]; then
+    jq ".current_account = $((current - 1))" "$STATE_FILE" > "${STATE_FILE}.tmp"
+  else
+    cp "$STATE_FILE" "${STATE_FILE}.tmp"
+  fi
+  mv "${STATE_FILE}.tmp" "$STATE_FILE"
+
+  # 5. Update sequence.json if configured
+  if [ -f "$SEQUENCE_FILE" ]; then
+    local seq_len=$(jq '.order | length // 0' "$SEQUENCE_FILE" 2>/dev/null || echo 0)
+    if [ "$seq_len" -gt 0 ]; then
+      jq ".order = [.order[] | select(. != $index) | if . > $index then . - 1 else . end]" "$SEQUENCE_FILE" > "${SEQUENCE_FILE}.tmp"
+      mv "${SEQUENCE_FILE}.tmp" "$SEQUENCE_FILE"
+    fi
+  fi
+
+  log "Removed account: $email"
+  echo -e "${GREEN}✓ Account removed: ${CYAN}$email${NC}"
+}
+
 # List accounts
 list_accounts() {
   local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
@@ -643,6 +731,7 @@ SETUP:
   --add-account <email>         Add account only (authenticate later)
   --auth <index>                Authenticate existing account (1-based index)
   --switch <index>              Switch to account (1-based index)
+  --remove-account <email|idx>  Remove account by email or index (1-based)
   --<email>                     Quick switch to account by email
   --reset                       Reset all accounts and state
 
@@ -718,6 +807,9 @@ main() {
       ;;
     --switch)
       switch_account "$2"
+      ;;
+    --remove-account)
+      remove_account "$2"
       ;;
     --accounts)
       interactive_account_selector
