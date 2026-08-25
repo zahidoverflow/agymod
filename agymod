@@ -354,7 +354,7 @@ list_accounts() {
       status="${GREEN}✓${NC}"
     fi
 
-    printf "  ${marker} %d. [${status}] %s\n" $((i + 1)) "$email"
+    printf "  ${marker} %2d. [${status}] %s\n" $((i + 1)) "$email"
   done
 
   echo ""
@@ -410,7 +410,7 @@ interactive_account_selector() {
   echo ""
   echo -e "${BLUE}┌─ Select Account ─────────────────────────────────────────┐${NC}"
   echo -e "${BLUE}│${NC}"
-  echo -e "${BLUE}│${NC}  ${GREEN}0${NC}  ${CYAN}[+] Add new account${NC}"
+  echo -e "${BLUE}│${NC}   ${GREEN}0${NC}  ${CYAN}[+] Add new account${NC}"
 
   if [ "$total" -gt 0 ]; then
     echo -e "${BLUE}│${NC}"
@@ -423,7 +423,12 @@ interactive_account_selector() {
         current_marker=" ${YELLOW}(current)${NC}"
       fi
 
-      echo -e "${BLUE}│${NC}  ${MAGENTA}$((i + 1))${NC}  ${email}  ${status}${current_marker}"
+      local idx_padded=$((i + 1))
+      if [ "$idx_padded" -lt 10 ]; then
+        idx_padded=" $idx_padded"
+      fi
+
+      echo -e "${BLUE}│${NC}  ${MAGENTA}${idx_padded}${NC}  ${email}  ${status}${current_marker}"
     done
   else
     echo -e "${BLUE}│${NC}"
