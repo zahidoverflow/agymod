@@ -8,6 +8,14 @@
 
 **agymod** is a lightweight, open-source account manager for Antigravity CLI that automatically rotates between multiple Google accounts when quota limits are reached. Work uninterrupted through API rate limits with seamless account switching.
 
+## 📸 Preview
+
+### Interactive Account Selector (`agymod --accounts`)
+![Interactive Account Selector](assets/interactive_selector.png)
+
+### Quota & Model Status Monitor
+![Quota Status Monitor](assets/quota_status.png)
+
 ---
 
 ## 🎯 Problem
