@@ -680,8 +680,8 @@ run_agy() {
         echo -e "${RED}⚠ QUOTA REACHED - AUTO-ROTATED${NC}"
         echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo ""
-        echo "Previous account: ${MAGENTA}$email${NC}"
-        echo "New account:      ${GREEN}$next_email${NC} ($((next + 1))/$total)"
+        echo -e "Previous account: ${MAGENTA}$email${NC}"
+        echo -e "New account:      ${GREEN}$next_email${NC} ($((next + 1))/$total)"
         echo ""
         echo -e "${YELLOW}To continue:${NC}"
         echo ""
@@ -707,9 +707,9 @@ show_status() {
   echo -e "${BLUE}  agymod Status${NC}"
   echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
   echo ""
-  echo "Total accounts: ${CYAN}$total${NC}"
-  echo "Current account: ${CYAN}$((current + 1))${NC}"
-  echo "Total rotations: ${YELLOW}$rotations${NC}"
+  echo -e "Total accounts: ${CYAN}$total${NC}"
+  echo -e "Current account: ${CYAN}$((current + 1))${NC}"
+  echo -e "Total rotations: ${YELLOW}$rotations${NC}"
   echo ""
 
   if [ "$total" -gt 0 ]; then
