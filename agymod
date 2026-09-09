@@ -102,6 +102,11 @@ clear_active_token() {
   clear_keyring_token
 }
 
+# Execute agy isolated from OS Keyring so that agymod token swapping is 100% authoritative
+exec_agy() {
+  DBUS_SESSION_BUS_ADDRESS="unix:path=/dev/null" agy "$@"
+}
+
 # Initialize directories with secure permissions
 mkdir -p "$PROXY_DIR" "$TOKENS_DIR"
 chmod 700 "$PROXY_DIR" "$TOKENS_DIR" 2>/dev/null || true
@@ -246,7 +251,7 @@ auth_account() {
   fi
 
   # Run agy to get the token (will prompt for fresh OAuth because both file and keyring are clear)
-  agy --dangerously-skip-permissions || true
+  exec_agy --dangerously-skip-permissions || true
 
   # Check if a new token was saved to file or OS keyring
   local saved_token=""
@@ -753,10 +758,10 @@ run_agy() {
     fi
   }
 
-  # Run agy safely without eval
+  # Run agy safely without eval (isolated from OS Keyring)
   if [ ${#agy_args[@]} -eq 0 ]; then
     # Interactive mode
-    agy --dangerously-skip-permissions || true
+    exec_agy --dangerously-skip-permissions || true
     sync_live_token
 
     # After agy exits, ask about quota (Enter = yes)
@@ -788,7 +793,7 @@ run_agy() {
     fi
   else
     # Non-interactive mode with prompt
-    agy --dangerously-skip-permissions "${agy_args[@]}"
+    exec_agy --dangerously-skip-permissions "${agy_args[@]}"
     sync_live_token
   fi
 }
