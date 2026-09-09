@@ -260,11 +260,14 @@ curl -sSL https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64
 # macOS
 brew install jq
 
+# Arch Linux / CachyOS
+sudo pacman -S jq libsecret
+
 # Ubuntu/Debian
-sudo apt-get install jq
+sudo apt-get install jq libsecret-tools
 
 # Fedora/RHEL
-sudo dnf install jq
+sudo dnf install jq libsecret
 ```
 
 ---

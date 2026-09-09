@@ -48,6 +48,58 @@ check_deps() {
       exit 1
     fi
   fi
+
+  # Optional keyring helper notice for Linux desktops
+  if [ -n "$DBUS_SESSION_BUS_ADDRESS" ] || [ -S "/run/user/$(id -u)/bus" ]; then
+    if ! command -v secret-tool >/dev/null 2>&1; then
+      log "Notice: Desktop session detected without 'secret-tool'. Install 'libsecret' if your desktop uses OS Keyring."
+    fi
+  fi
+}
+
+# OS Keyring Support (Secret Service / GNOME Keyring / KWallet)
+has_keyring() {
+  command -v secret-tool >/dev/null 2>&1
+}
+
+# Get current token from OS Keyring (if available)
+get_keyring_token() {
+  if has_keyring; then
+    secret-tool lookup service gemini username antigravity 2>/dev/null || true
+  fi
+}
+
+# Store token into OS Keyring (if available)
+set_keyring_token() {
+  local token_path="$1"
+  if has_keyring && [ -f "$token_path" ]; then
+    secret-tool store --label="Password for 'antigravity' on 'gemini'" service gemini username antigravity < "$token_path" 2>/dev/null || true
+  fi
+}
+
+# Clear token from OS Keyring (if available)
+clear_keyring_token() {
+  if has_keyring; then
+    secret-tool clear service gemini username antigravity 2>/dev/null || true
+  fi
+}
+
+# Apply account token to BOTH file storage and OS Keyring
+apply_account_token() {
+  local token_path="$1"
+  if [ ! -f "$token_path" ]; then
+    return 1
+  fi
+  mkdir -p "$(dirname "$AGY_AUTH_FILE")"
+  cp "$token_path" "$AGY_AUTH_FILE"
+  chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
+  set_keyring_token "$token_path"
+}
+
+# Clear active tokens from BOTH file storage and OS Keyring
+clear_active_token() {
+  rm -f "$AGY_AUTH_FILE"
+  clear_keyring_token
 }
 
 # Initialize directories with secure permissions
@@ -178,30 +230,62 @@ auth_account() {
   echo ""
   echo -e "${YELLOW}1. agy will open in browser for OAuth login${NC}"
   echo -e "${YELLOW}2. Sign in with: ${CYAN}$email${NC}"
-  echo -e "${YELLOW}3. After login, close agy with ${CYAN}Ctrl+C${NC}"
+  echo -e "${YELLOW}3. After login, close agy with ${CYAN}Ctrl+D Ctrl+D${NC} or ${CYAN}Ctrl+C${NC}"
   echo ""
 
-  # Force fresh OAuth by temporarily moving the auth file
+  # Force fresh OAuth by temporarily moving auth file AND clearing OS keyring
   local backup_file="${AGY_AUTH_FILE}.backup"
   if [ -f "$AGY_AUTH_FILE" ]; then
     mv "$AGY_AUTH_FILE" "$backup_file"
   fi
 
-  # Run agy to get the token (will prompt for fresh OAuth)
+  local backup_keyring=""
+  if has_keyring; then
+    backup_keyring=$(get_keyring_token)
+    clear_keyring_token
+  fi
+
+  # Run agy to get the token (will prompt for fresh OAuth because both file and keyring are clear)
   agy --dangerously-skip-permissions || true
 
-  # Save the token
-  if [ -f "$AGY_AUTH_FILE" ]; then
-    cp "$AGY_AUTH_FILE" "$token_file"
-    chmod 600 "$token_file" 2>/dev/null || true
+  # Check if a new token was saved to file or OS keyring
+  local saved_token=""
+  if [ -f "$AGY_AUTH_FILE" ] && [ -s "$AGY_AUTH_FILE" ]; then
+    saved_token="$AGY_AUTH_FILE"
+  elif has_keyring; then
+    local kt
+    kt=$(get_keyring_token)
+    if [ -n "$kt" ]; then
+      echo "$kt" > "$token_file"
+      chmod 600 "$token_file" 2>/dev/null || true
+      saved_token="$token_file"
+      cp "$token_file" "$AGY_AUTH_FILE"
+      chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
+    fi
+  fi
+
+  # Save and verify the token
+  if [ -n "$saved_token" ] && [ -s "$saved_token" ]; then
+    if [ "$saved_token" != "$token_file" ]; then
+      cp "$saved_token" "$token_file"
+      chmod 600 "$token_file" 2>/dev/null || true
+    fi
+    # Ensure BOTH file and keyring are synced with this account
+    apply_account_token "$token_file"
     log "Saved token for account $((index + 1)): $email"
     echo -e "${GREEN}[OK] Token saved for: ${CYAN}$email${NC}"
   else
-    # Restore backup if auth didn't work
+    # Restore backups if auth didn't work / was cancelled
     if [ -f "$backup_file" ]; then
       mv "$backup_file" "$AGY_AUTH_FILE"
     fi
-    echo -e "${RED}Error: Auth file not found${NC}"
+    if [ -n "$backup_keyring" ]; then
+      local tmp_bk="${PROXY_DIR}/.keyring_restore.tmp"
+      echo "$backup_keyring" > "$tmp_bk"
+      set_keyring_token "$tmp_bk"
+      rm -f "$tmp_bk"
+    fi
+    echo -e "${RED}Error: Auth failed or cancelled (no token generated)${NC}"
     exit 1
   fi
 
@@ -295,16 +379,15 @@ remove_account() {
   
   if [ "$new_total" -eq 0 ]; then
     jq ".current_account = 0 | .total_accounts = 0" "$STATE_FILE" > "${STATE_FILE}.tmp"
-    rm -f "$AGY_AUTH_FILE"
+    clear_active_token
   elif [ "$current" -eq "$index" ]; then
     local new_current=0
     jq ".current_account = $new_current" "$STATE_FILE" > "${STATE_FILE}.tmp"
     local next_token="${TOKENS_DIR}/${new_current}-token.json"
     if [ -f "$next_token" ]; then
-      cp "$next_token" "$AGY_AUTH_FILE"
-      chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
+      apply_account_token "$next_token"
     else
-      rm -f "$AGY_AUTH_FILE"
+      clear_active_token
     fi
   elif [ "$current" -gt "$index" ]; then
     jq ".current_account = $((current - 1))" "$STATE_FILE" > "${STATE_FILE}.tmp"
@@ -499,8 +582,7 @@ interactive_account_selector() {
   # Switch to selected account
   jq ".current_account = $selected" "$STATE_FILE" > "${STATE_FILE}.tmp"
   mv "${STATE_FILE}.tmp" "$STATE_FILE"
-  cp "$selected_token" "$AGY_AUTH_FILE"
-  chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
+  apply_account_token "$selected_token"
 
   log "Selected account $selected: $selected_email"
 
@@ -547,8 +629,7 @@ switch_account() {
   fi
 
   # Swap token
-  cp "$token_file" "$AGY_AUTH_FILE"
-  chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
+  apply_account_token "$token_file"
   jq ".current_account = $index" "$STATE_FILE" > "${STATE_FILE}.tmp"
   mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
@@ -599,8 +680,7 @@ rotate_account() {
   # Switch the token
   local next_token=$(jq -r ".accounts[$next].token_file" "$ACCOUNTS_FILE")
   if [ -f "$next_token" ]; then
-    cp "$next_token" "$AGY_AUTH_FILE"
-    chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
+    apply_account_token "$next_token"
   fi
 
   log "Rotated to account $next (total rotations: $((rotations + 1)))"
@@ -643,9 +723,8 @@ run_agy() {
     exit 1
   fi
 
-  # Ensure token is loaded
-  cp "$token_file" "$AGY_AUTH_FILE"
-  chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
+  # Ensure token is loaded in both file and OS keyring
+  apply_account_token "$token_file"
 
   log "Running with account $current: $email"
   echo -e "${BLUE}[agymod]${NC} Using account: ${CYAN}$email${NC} (${YELLOW}$((current + 1))/$total${NC})"
@@ -659,10 +738,26 @@ run_agy() {
     fi
   done
 
+  # Helper to capture any refreshed token after session
+  sync_live_token() {
+    if has_keyring; then
+      local refreshed_kt
+      refreshed_kt=$(get_keyring_token)
+      if [ -n "$refreshed_kt" ]; then
+        echo "$refreshed_kt" > "$token_file"
+        chmod 600 "$token_file" 2>/dev/null || true
+      fi
+    elif [ -f "$AGY_AUTH_FILE" ]; then
+      cp "$AGY_AUTH_FILE" "$token_file"
+      chmod 600 "$token_file" 2>/dev/null || true
+    fi
+  }
+
   # Run agy safely without eval
   if [ ${#agy_args[@]} -eq 0 ]; then
     # Interactive mode
     agy --dangerously-skip-permissions || true
+    sync_live_token
 
     # After agy exits, ask about quota (Enter = yes)
     echo ""
@@ -694,6 +789,7 @@ run_agy() {
   else
     # Non-interactive mode with prompt
     agy --dangerously-skip-permissions "${agy_args[@]}"
+    sync_live_token
   fi
 }
 
@@ -821,6 +917,7 @@ main() {
       ;;
     --reset)
       log "Resetting all state..."
+      clear_active_token
       rm -rf "$PROXY_DIR"
       mkdir -p "$PROXY_DIR" "$TOKENS_DIR"
       chmod 700 "$PROXY_DIR" "$TOKENS_DIR" 2>/dev/null || true
