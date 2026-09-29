@@ -4,6 +4,7 @@
 # Usage: agymod [commands]
 
 set -e
+umask 077
 
 # Configuration
 PROXY_DIR="${HOME}/.agymod"
