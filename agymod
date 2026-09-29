@@ -108,6 +108,26 @@ exec_agy() {
   DBUS_SESSION_BUS_ADDRESS="unix:path=/dev/null" agy "$@"
 }
 
+# Extract user email from token file (decodes JWT id_token claim)
+get_token_email() {
+  local token_path="$1"
+  [ ! -f "$token_path" ] && return 1
+  local id_tok payload email
+  id_tok=$(jq -r '.id_token // ""' "$token_path" 2>/dev/null || true)
+  [ -z "$id_tok" ] || [ "$id_tok" = "null" ] && return 1
+  payload=$(echo "$id_tok" | cut -d. -f2 2>/dev/null || true)
+  [ -z "$payload" ] && return 1
+  local rem=$(( ${#payload} % 4 ))
+  [ $rem -eq 2 ] && payload="${payload}=="
+  [ $rem -eq 3 ] && payload="${payload}="
+  email=$(echo "$payload" | base64 -d 2>/dev/null | jq -r '.email // ""' 2>/dev/null || true)
+  if [ -n "$email" ] && [ "$email" != "null" ]; then
+    echo "$email"
+    return 0
+  fi
+  return 1
+}
+
 # Initialize directories with secure permissions
 mkdir -p "$PROXY_DIR" "$TOKENS_DIR"
 chmod 700 "$PROXY_DIR" "$TOKENS_DIR" 2>/dev/null || true
@@ -254,32 +274,36 @@ auth_account() {
   # Run agy to get the token (will prompt for fresh OAuth because both file and keyring are clear)
   exec_agy --dangerously-skip-permissions || true
 
-  # Check if a new token was saved to file or OS keyring
+  # Check if a new token was saved to file
   local saved_token=""
   if [ -f "$AGY_AUTH_FILE" ] && [ -s "$AGY_AUTH_FILE" ]; then
     saved_token="$AGY_AUTH_FILE"
-  elif has_keyring; then
-    local kt
-    kt=$(get_keyring_token)
-    if [ -n "$kt" ]; then
-      echo "$kt" > "$token_file"
-      chmod 600 "$token_file" 2>/dev/null || true
-      saved_token="$token_file"
-      cp "$token_file" "$AGY_AUTH_FILE"
-      chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
-    fi
   fi
 
   # Save and verify the token
   if [ -n "$saved_token" ] && [ -s "$saved_token" ]; then
-    if [ "$saved_token" != "$token_file" ]; then
-      cp "$saved_token" "$token_file"
-      chmod 600 "$token_file" 2>/dev/null || true
+    local actual_email
+    actual_email=$(get_token_email "$saved_token" || true)
+
+    if [ -n "$actual_email" ] && [ "$actual_email" != "$email" ]; then
+      echo ""
+      echo -e "${RED}[ERR] Account mismatch detected during authentication!${NC}"
+      echo -e "Expected login for:  ${CYAN}$email${NC}"
+      echo -e "Actually signed in:  ${YELLOW}$actual_email${NC}"
+      echo -e "${RED}Aborting to prevent account cross-contamination.${NC}"
+      rm -f "$AGY_AUTH_FILE"
+      if [ -f "$backup_file" ]; then
+        mv "$backup_file" "$AGY_AUTH_FILE"
+      fi
+      exit 1
     fi
+
+    cp "$saved_token" "$token_file"
+    chmod 600 "$token_file" 2>/dev/null || true
     # Ensure BOTH file and keyring are synced with this account
     apply_account_token "$token_file"
     log "Saved token for account $((index + 1)): $email"
-    echo -e "${GREEN}[OK] Token saved for: ${CYAN}$email${NC}"
+    echo -e "${GREEN}[OK] Token verified and saved for: ${CYAN}$email${NC}"
   else
     # Restore backups if auth didn't work / was cancelled
     if [ -f "$backup_file" ]; then
@@ -440,7 +464,15 @@ list_accounts() {
     fi
 
     if [ -f "$token_file" ]; then
-      status="${GREEN}*${NC}"
+      local tok_email
+      tok_email=$(get_token_email "$token_file" || true)
+      if [ "$tok_email" = "$email" ]; then
+        status="${GREEN}*${NC}"
+      elif [ -n "$tok_email" ]; then
+        status="${YELLOW}!${NC}"
+      else
+        status="${RED}?${NC}"
+      fi
     fi
 
     printf "  ${marker} %2d. [${status}] %s\n" $((i + 1)) "$email"
@@ -488,7 +520,15 @@ interactive_account_selector() {
     local status="${RED}x Not auth${NC}"
 
     if [ -f "$token_file" ]; then
-      status="${GREEN}* Ready${NC}"
+      local tok_email
+      tok_email=$(get_token_email "$token_file" || true)
+      if [ "$tok_email" = "$email" ]; then
+        status="${GREEN}* Ready${NC}"
+      elif [ -n "$tok_email" ]; then
+        status="${YELLOW}! Mismatch ($tok_email)${NC}"
+      else
+        status="${RED}x Invalid token${NC}"
+      fi
     fi
 
     accounts[$i]="$email"
@@ -578,9 +618,20 @@ interactive_account_selector() {
   local selected_token="${TOKENS_DIR}/$selected-token.json"
 
   if [ ! -f "$selected_token" ]; then
-    echo -e "${RED}[ERR] Account not authenticated${NC}"
+    echo -e "${RED}[ERR] Account not authenticated: ${CYAN}$selected_email${NC}"
     echo ""
     echo "Authenticate this account:"
+    echo -e "  ${GREEN}agymod --auth $((selected + 1))${NC}"
+    return 1
+  fi
+
+  local actual_email
+  actual_email=$(get_token_email "$selected_token" || true)
+  if [ -n "$actual_email" ] && [ "$actual_email" != "$selected_email" ]; then
+    echo -e "${RED}[ERR] Token mismatch for account: ${CYAN}$selected_email${NC}"
+    echo -e "Token actually belongs to: ${YELLOW}$actual_email${NC}"
+    echo ""
+    echo "Please re-authenticate this account:"
     echo -e "  ${GREEN}agymod --auth $((selected + 1))${NC}"
     return 1
   fi
@@ -634,6 +685,15 @@ switch_account() {
     exit 1
   fi
 
+  local actual_email
+  actual_email=$(get_token_email "$token_file" || true)
+  if [ -n "$actual_email" ] && [ "$actual_email" != "$email" ]; then
+    echo -e "${RED}Error: Token mismatch for Account $input_idx ($email).${NC}"
+    echo -e "Token actually belongs to: ${YELLOW}$actual_email${NC}"
+    echo -e "Please re-authenticate: ${CYAN}agymod --auth $input_idx${NC}"
+    exit 1
+  fi
+
   # Swap token
   apply_account_token "$token_file"
   jq ".current_account = $index" "$STATE_FILE" > "${STATE_FILE}.tmp"
@@ -674,8 +734,27 @@ rotate_account() {
       next=$(jq -r ".order[0]" "$SEQUENCE_FILE")
     fi
   else
-    # Default linear rotation
-    next=$(( (current + 1) % total ))
+    # Default rotation - prioritize next authenticated and ready account
+    local found=-1
+    for ((step = 1; step <= total; step++)); do
+      local cand=$(( (current + step) % total ))
+      local cand_email=$(jq -r ".accounts[$cand].email // \"\"" "$ACCOUNTS_FILE")
+      local cand_token=$(jq -r ".accounts[$cand].token_file // \"\"" "$ACCOUNTS_FILE")
+      if [ -f "$cand_token" ]; then
+        local cand_tok_email
+        cand_tok_email=$(get_token_email "$cand_token" || true)
+        if [ "$cand_tok_email" = "$cand_email" ]; then
+          found=$cand
+          break
+        fi
+      fi
+    done
+
+    if [ "$found" -ge 0 ]; then
+      next=$found
+    else
+      next=$(( (current + 1) % total ))
+    fi
   fi
 
   local rotations=$(jq -r '.rotations // 0' "$STATE_FILE")
@@ -717,15 +796,30 @@ run_agy() {
   local token_file=$(jq -r ".accounts[$current].token_file // \"\"" "$ACCOUNTS_FILE")
 
   if [ ! -f "$token_file" ]; then
-    echo -e "${RED}[ERR] Current account not authenticated${NC}"
+    echo -e "${RED}[ERR] Current account not authenticated: ${CYAN}$email${NC} (Account $((current + 1)))"
     echo ""
     echo "Authenticate this account:"
     echo -e "  ${GREEN}agymod --auth $((current + 1))${NC}"
     echo ""
-    echo "Or add a new account:"
-    echo -e "  ${GREEN}agymod --add-account-auth your-email@gmail.com${NC}"
+    echo "Or select a ready account:"
+    echo -e "  ${GREEN}agymod --accounts${NC}"
     echo ""
-    show_help
+    exit 1
+  fi
+
+  local actual_email
+  actual_email=$(get_token_email "$token_file" || true)
+  if [ -n "$actual_email" ] && [ "$actual_email" != "$email" ]; then
+    echo -e "${RED}[ERR] Token mismatch for Account $((current + 1))!${NC}"
+    echo -e "Expected account: ${CYAN}$email${NC}"
+    echo -e "Token belongs to: ${YELLOW}$actual_email${NC}"
+    echo ""
+    echo -e "${RED}Please re-authenticate this account:${NC}"
+    echo -e "  ${GREEN}agymod --auth $((current + 1))${NC}"
+    echo ""
+    echo "Or select a ready account:"
+    echo -e "  ${GREEN}agymod --accounts${NC}"
+    echo ""
     exit 1
   fi
 
@@ -746,16 +840,15 @@ run_agy() {
 
   # Helper to capture any refreshed token after session
   sync_live_token() {
-    if has_keyring; then
-      local refreshed_kt
-      refreshed_kt=$(get_keyring_token)
-      if [ -n "$refreshed_kt" ]; then
-        echo "$refreshed_kt" > "$token_file"
+    if [ -f "$AGY_AUTH_FILE" ] && [ -s "$AGY_AUTH_FILE" ]; then
+      local live_email
+      live_email=$(get_token_email "$AGY_AUTH_FILE" || true)
+      if [ "$live_email" = "$email" ]; then
+        cp "$AGY_AUTH_FILE" "$token_file"
         chmod 600 "$token_file" 2>/dev/null || true
+      elif [ -n "$live_email" ]; then
+        log "Warning: Live token email ($live_email) did not match expected account ($email). Refusing to overwrite token."
       fi
-    elif [ -f "$AGY_AUTH_FILE" ]; then
-      cp "$AGY_AUTH_FILE" "$token_file"
-      chmod 600 "$token_file" 2>/dev/null || true
     fi
   }
 
