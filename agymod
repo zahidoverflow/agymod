@@ -27,24 +27,44 @@ NC='\033[0m'
 # Ensure ~/.local/bin is in PATH for userspace binaries (agy, jq)
 export PATH="${HOME}/.local/bin:${PATH}"
 
+# Validate email format to prevent malformed entries or injection
+is_valid_email() {
+  local email="$1"
+  [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]
+}
+
 # Check dependencies
 check_deps() {
   if ! command -v jq >/dev/null 2>&1; then
     echo -e "${YELLOW}[agymod] Dependency 'jq' not found. Installing static jq to ~/.local/bin/jq (no su required)...${NC}"
     mkdir -p "${HOME}/.local/bin"
+    local os_name="linux"
+    if [ "$(uname -s)" = "Darwin" ]; then
+      os_name="macos"
+    fi
     local arch
     case "$(uname -m)" in
-      x86_64|amd64) arch="linux-amd64" ;;
-      aarch64|arm64) arch="linux-arm64" ;;
+      x86_64|amd64) arch="${os_name}-amd64" ;;
+      aarch64|arm64) arch="${os_name}-arm64" ;;
       armv7l|armhf) arch="linux-armhf" ;;
       i386|i686) arch="linux-i386" ;;
-      *) arch="linux-amd64" ;;
+      *) arch="${os_name}-amd64" ;;
     esac
     local jq_url="https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-${arch}"
-    if curl -sSL "$jq_url" -o "${HOME}/.local/bin/jq" 2>/dev/null && [ -s "${HOME}/.local/bin/jq" ]; then
-      chmod +x "${HOME}/.local/bin/jq"
-      echo -e "${GREEN}[OK] Installed static jq binary to ~/.local/bin/jq${NC}"
+    local tmp_jq="${HOME}/.local/bin/.jq.tmp.$$"
+    if curl -fsSL --proto '=https' --tlsv1.2 "$jq_url" -o "$tmp_jq" 2>/dev/null && [ -s "$tmp_jq" ]; then
+      chmod 700 "$tmp_jq"
+      if "$tmp_jq" --version 2>/dev/null | grep -q "^jq-"; then
+        mv "$tmp_jq" "${HOME}/.local/bin/jq"
+        chmod 755 "${HOME}/.local/bin/jq"
+        echo -e "${GREEN}[OK] Installed static jq binary to ~/.local/bin/jq${NC}"
+      else
+        rm -f "$tmp_jq"
+        echo -e "${RED}[ERR] Downloaded jq binary failed verification. Please install jq via your package manager.${NC}"
+        exit 1
+      fi
     else
+      rm -f "$tmp_jq"
       echo -e "${RED}[ERR] Could not download jq from ${jq_url}. Please install jq or place binary in ~/.local/bin/jq${NC}"
       exit 1
     fi
@@ -91,7 +111,21 @@ apply_account_token() {
   if [ ! -f "$token_path" ]; then
     return 1
   fi
-  mkdir -p "$(dirname "$AGY_AUTH_FILE")"
+  # Auto-migrate legacy tokens to include id_token_email so agy 1.5+ preserves email on refresh
+  local has_id_email
+  has_id_email=$(jq -r '.id_token_email // ""' "$token_path" 2>/dev/null || true)
+  if [ -z "$has_id_email" ] || [ "$has_id_email" = "null" ]; then
+    local tok_email
+    tok_email=$(get_token_email "$token_path" || true)
+    if [ -n "$tok_email" ]; then
+      jq -c --arg em "$tok_email" '. + {id_token_email: $em}' "$token_path" > "${token_path}.tmp" 2>/dev/null && mv "${token_path}.tmp" "$token_path"
+      chmod 600 "$token_path" 2>/dev/null || true
+    fi
+  fi
+  local auth_dir
+  auth_dir="$(dirname "$AGY_AUTH_FILE")"
+  mkdir -p "$auth_dir"
+  chmod 700 "$auth_dir" 2>/dev/null || true
   cp "$token_path" "$AGY_AUTH_FILE"
   chmod 600 "$AGY_AUTH_FILE" 2>/dev/null || true
   set_keyring_token "$token_path"
@@ -108,23 +142,37 @@ exec_agy() {
   DBUS_SESSION_BUS_ADDRESS="unix:path=/dev/null" agy "$@"
 }
 
-# Extract user email from token file (decodes JWT id_token claim)
+# Extract user email from token file (supports direct field in agy 1.5+ and JWT decode in older versions)
 get_token_email() {
   local token_path="$1"
   [ ! -f "$token_path" ] && return 1
-  local id_tok payload email
-  id_tok=$(jq -r '.id_token // ""' "$token_path" 2>/dev/null || true)
-  [ -z "$id_tok" ] || [ "$id_tok" = "null" ] && return 1
-  payload=$(echo "$id_tok" | cut -d. -f2 2>/dev/null || true)
-  [ -z "$payload" ] && return 1
-  local rem=$(( ${#payload} % 4 ))
-  [ $rem -eq 2 ] && payload="${payload}=="
-  [ $rem -eq 3 ] && payload="${payload}="
-  email=$(echo "$payload" | base64 -d 2>/dev/null | jq -r '.email // ""' 2>/dev/null || true)
+  local email
+
+  # 1. Direct id_token_email field (Antigravity CLI 1.5+)
+  email=$(jq -r '.id_token_email // .email // .user_email // ""' "$token_path" 2>/dev/null || true)
   if [ -n "$email" ] && [ "$email" != "null" ]; then
-    echo "$email"
+    printf '%s\n' "$email"
     return 0
   fi
+
+  # 2. Decode JWT id_token claim (older agy versions)
+  local id_tok
+  id_tok=$(jq -r '.id_token // .token.id_token // ""' "$token_path" 2>/dev/null || true)
+  if [ -n "$id_tok" ] && [ "$id_tok" != "null" ]; then
+    local payload
+    payload=$(printf '%s' "$id_tok" | cut -d. -f2 2>/dev/null || true)
+    if [ -n "$payload" ]; then
+      local rem=$(( ${#payload} % 4 ))
+      [ $rem -eq 2 ] && payload="${payload}=="
+      [ $rem -eq 3 ] && payload="${payload}="
+      email=$(printf '%s' "$payload" | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r '.email // ""' 2>/dev/null || true)
+      if [ -n "$email" ] && [ "$email" != "null" ]; then
+        printf '%s\n' "$email"
+        return 0
+      fi
+    fi
+  fi
+
   return 1
 }
 
@@ -134,6 +182,8 @@ chmod 700 "$PROXY_DIR" "$TOKENS_DIR" 2>/dev/null || true
 
 # Logging
 log() {
+  touch "$LOG_FILE" 2>/dev/null || true
+  chmod 600 "$LOG_FILE" 2>/dev/null || true
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
   echo -e "${BLUE}[agymod]${NC} $*"
 }
@@ -150,6 +200,7 @@ init_state() {
 }
 EOF
   fi
+  chmod 600 "$STATE_FILE" 2>/dev/null || true
 }
 
 # Initialize accounts
@@ -161,6 +212,7 @@ init_accounts() {
 }
 EOF
   fi
+  chmod 600 "$ACCOUNTS_FILE" 2>/dev/null || true
 }
 
 # Initialize sequence file
@@ -173,6 +225,7 @@ init_sequence() {
 }
 EOF
   fi
+  chmod 600 "$SEQUENCE_FILE" 2>/dev/null || true
 }
 
 # Get account index by email (returns 0-based index)
@@ -185,7 +238,7 @@ get_account_index_by_email() {
   fi
 
   for i in $(seq 0 $((total - 1))); do
-    local acc_email=$(jq -r ".accounts[$i].email // \"\"" "$ACCOUNTS_FILE")
+    local acc_email=$(jq -r --argjson i "$i" '.accounts[$i].email // ""' "$ACCOUNTS_FILE")
     if [ "$acc_email" = "$email" ]; then
       echo "$i"
       return 0
@@ -202,6 +255,11 @@ add_account() {
     exit 1
   fi
 
+  if ! is_valid_email "$email"; then
+    echo -e "${RED}Error: Invalid email format '$email'${NC}"
+    exit 1
+  fi
+
   local existing_idx
   if existing_idx=$(get_account_index_by_email "$email" 2>/dev/null); then
     echo -e "${YELLOW}[!] Account already exists: ${CYAN}$email${NC} (Account $((existing_idx + 1)))"
@@ -212,9 +270,15 @@ add_account() {
 
   local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
 
-  # Add to accounts
-  jq ".accounts += [{\"email\": \"$email\", \"index\": $total, \"token_file\": \"${TOKENS_DIR}/${total}-token.json\"}]" "$ACCOUNTS_FILE" > "${ACCOUNTS_FILE}.tmp"
+  # Add to accounts safely using parameterized jq arguments
+  jq --arg email "$email" \
+     --argjson idx "$total" \
+     --arg tf "${TOKENS_DIR}/${total}-token.json" \
+     '.accounts += [{"email": $email, "index": $idx, "token_file": $tf}]' \
+     "$ACCOUNTS_FILE" > "${ACCOUNTS_FILE}.tmp"
   mv "${ACCOUNTS_FILE}.tmp" "$ACCOUNTS_FILE"
+  jq --argjson tot "$((total + 1))" '.total_accounts = $tot' "$STATE_FILE" > "${STATE_FILE}.tmp"
+  mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
   log "Added account: $email"
   echo -e "${GREEN}[+] Account added: ${CYAN}$email${NC} (Account $((total + 1)))"
@@ -244,13 +308,13 @@ auth_account() {
     exit 1
   fi
 
-  local email=$(jq -r ".accounts[$index].email // \"\"" "$ACCOUNTS_FILE")
+  local email=$(jq -r --argjson idx "$index" '.accounts[$idx].email // ""' "$ACCOUNTS_FILE")
   if [ -z "$email" ]; then
     echo -e "${RED}Error: Account $input_idx not found${NC}"
     exit 1
   fi
 
-  local token_file=$(jq -r ".accounts[$index].token_file" "$ACCOUNTS_FILE")
+  local token_file=$(jq -r --argjson idx "$index" '.accounts[$idx].token_file' "$ACCOUNTS_FILE")
 
   echo -e "${YELLOW}Authenticating: ${CYAN}$email${NC} (Account $((index + 1)))"
   echo ""
@@ -271,8 +335,23 @@ auth_account() {
     clear_keyring_token
   fi
 
+  restore_auth_backups() {
+    if [ -f "$backup_file" ]; then
+      mv "$backup_file" "$AGY_AUTH_FILE"
+    fi
+    if [ -n "$backup_keyring" ]; then
+      local tmp_bk="${PROXY_DIR}/.keyring_restore.tmp"
+      printf '%s\n' "$backup_keyring" > "$tmp_bk"
+      chmod 600 "$tmp_bk" 2>/dev/null || true
+      set_keyring_token "$tmp_bk"
+      rm -f "$tmp_bk"
+    fi
+  }
+
   # Run agy to get the token (will prompt for fresh OAuth because both file and keyring are clear)
+  trap 'restore_auth_backups; trap - INT TERM; exit 130' INT TERM
   exec_agy --dangerously-skip-permissions || true
+  trap - INT TERM
 
   # Check if a new token was saved to file
   local saved_token=""
@@ -292,9 +371,7 @@ auth_account() {
       echo -e "Actually signed in:  ${YELLOW}$actual_email${NC}"
       echo -e "${RED}Aborting to prevent account cross-contamination.${NC}"
       rm -f "$AGY_AUTH_FILE"
-      if [ -f "$backup_file" ]; then
-        mv "$backup_file" "$AGY_AUTH_FILE"
-      fi
+      restore_auth_backups
       exit 1
     fi
 
@@ -302,19 +379,12 @@ auth_account() {
     chmod 600 "$token_file" 2>/dev/null || true
     # Ensure BOTH file and keyring are synced with this account
     apply_account_token "$token_file"
+    jq --argjson idx "$index" --argjson tot "$total" '.current_account = $idx | .total_accounts = $tot' "$STATE_FILE" > "${STATE_FILE}.tmp"
+    mv "${STATE_FILE}.tmp" "$STATE_FILE"
     log "Saved token for account $((index + 1)): $email"
     echo -e "${GREEN}[OK] Token verified and saved for: ${CYAN}$email${NC}"
   else
-    # Restore backups if auth didn't work / was cancelled
-    if [ -f "$backup_file" ]; then
-      mv "$backup_file" "$AGY_AUTH_FILE"
-    fi
-    if [ -n "$backup_keyring" ]; then
-      local tmp_bk="${PROXY_DIR}/.keyring_restore.tmp"
-      echo "$backup_keyring" > "$tmp_bk"
-      set_keyring_token "$tmp_bk"
-      rm -f "$tmp_bk"
-    fi
+    restore_auth_backups
     echo -e "${RED}Error: Auth failed or cancelled (no token generated)${NC}"
     exit 1
   fi
@@ -331,6 +401,11 @@ add_account_auth() {
     exit 1
   fi
 
+  if ! is_valid_email "$email"; then
+    echo -e "${RED}Error: Invalid email format '$email'${NC}"
+    exit 1
+  fi
+
   local existing_idx
   if existing_idx=$(get_account_index_by_email "$email" 2>/dev/null); then
     echo -e "${YELLOW}[!] Account already exists: ${CYAN}$email${NC} (Account $((existing_idx + 1)))"
@@ -340,9 +415,15 @@ add_account_auth() {
 
   local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
 
-  # Add to accounts
-  jq ".accounts += [{\"email\": \"$email\", \"index\": $total, \"token_file\": \"${TOKENS_DIR}/${total}-token.json\"}]" "$ACCOUNTS_FILE" > "${ACCOUNTS_FILE}.tmp"
+  # Add to accounts safely using parameterized jq arguments
+  jq --arg email "$email" \
+     --argjson idx "$total" \
+     --arg tf "${TOKENS_DIR}/${total}-token.json" \
+     '.accounts += [{"email": $email, "index": $idx, "token_file": $tf}]' \
+     "$ACCOUNTS_FILE" > "${ACCOUNTS_FILE}.tmp"
   mv "${ACCOUNTS_FILE}.tmp" "$ACCOUNTS_FILE"
+  jq --argjson tot "$((total + 1))" '.total_accounts = $tot' "$STATE_FILE" > "${STATE_FILE}.tmp"
+  mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
   log "Added account: $email"
   echo -e "${GREEN}[+] Account added: ${CYAN}$email${NC} (Account $((total + 1)))"
@@ -380,8 +461,8 @@ remove_account() {
     exit 1
   fi
 
-  local email=$(jq -r ".accounts[$index].email" "$ACCOUNTS_FILE")
-  local token_file=$(jq -r ".accounts[$index].token_file" "$ACCOUNTS_FILE")
+  local email=$(jq -r --argjson idx "$index" '.accounts[$idx].email' "$ACCOUNTS_FILE")
+  local token_file=$(jq -r --argjson idx "$index" '.accounts[$idx].token_file' "$ACCOUNTS_FILE")
 
   # 1. Delete target token file
   if [ -f "$token_file" ]; then
@@ -400,7 +481,9 @@ remove_account() {
   done
 
   # 3. Remove the account from accounts.json and update indices and token_file paths
-  jq --arg tokens_dir "$TOKENS_DIR" "del(.accounts[$index]) | .accounts = (.accounts | to_entries | map(.value.index = .key | .value.token_file = (\$tokens_dir + \"/\" + (.key|tostring) + \"-token.json\") | .value))" "$ACCOUNTS_FILE" > "${ACCOUNTS_FILE}.tmp"
+  jq --arg tokens_dir "$TOKENS_DIR" --argjson idx "$index" \
+    'del(.accounts[$idx]) | .accounts = (.accounts | to_entries | map(.value.index = .key | .value.token_file = ($tokens_dir + "/" + (.key|tostring) + "-token.json") | .value))' \
+    "$ACCOUNTS_FILE" > "${ACCOUNTS_FILE}.tmp"
   mv "${ACCOUNTS_FILE}.tmp" "$ACCOUNTS_FILE"
 
   # 4. Update current_account in state.json if needed
@@ -408,11 +491,11 @@ remove_account() {
   local new_total=$((total - 1))
   
   if [ "$new_total" -eq 0 ]; then
-    jq ".current_account = 0 | .total_accounts = 0" "$STATE_FILE" > "${STATE_FILE}.tmp"
+    jq '.current_account = 0 | .total_accounts = 0' "$STATE_FILE" > "${STATE_FILE}.tmp"
     clear_active_token
   elif [ "$current" -eq "$index" ]; then
     local new_current=0
-    jq ".current_account = $new_current" "$STATE_FILE" > "${STATE_FILE}.tmp"
+    jq --argjson nc "$new_current" --argjson nt "$new_total" '.current_account = $nc | .total_accounts = $nt' "$STATE_FILE" > "${STATE_FILE}.tmp"
     local next_token="${TOKENS_DIR}/${new_current}-token.json"
     if [ -f "$next_token" ]; then
       apply_account_token "$next_token"
@@ -420,9 +503,9 @@ remove_account() {
       clear_active_token
     fi
   elif [ "$current" -gt "$index" ]; then
-    jq ".current_account = $((current - 1))" "$STATE_FILE" > "${STATE_FILE}.tmp"
+    jq --argjson nc "$((current - 1))" --argjson nt "$new_total" '.current_account = $nc | .total_accounts = $nt' "$STATE_FILE" > "${STATE_FILE}.tmp"
   else
-    cp "$STATE_FILE" "${STATE_FILE}.tmp"
+    jq --argjson nt "$new_total" '.total_accounts = $nt' "$STATE_FILE" > "${STATE_FILE}.tmp"
   fi
   mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
@@ -430,7 +513,7 @@ remove_account() {
   if [ -f "$SEQUENCE_FILE" ]; then
     local seq_len=$(jq '.order | length // 0' "$SEQUENCE_FILE" 2>/dev/null || echo 0)
     if [ "$seq_len" -gt 0 ]; then
-      jq ".order = [.order[] | select(. != $index) | if . > $index then . - 1 else . end]" "$SEQUENCE_FILE" > "${SEQUENCE_FILE}.tmp"
+      jq --argjson idx "$index" '.order = [.order[] | select(. != $idx) | if . > $idx then . - 1 else . end]' "$SEQUENCE_FILE" > "${SEQUENCE_FILE}.tmp"
       mv "${SEQUENCE_FILE}.tmp" "$SEQUENCE_FILE"
     fi
   fi
@@ -452,10 +535,13 @@ list_accounts() {
   echo ""
 
   local current=$(jq -r '.current_account // 0' "$STATE_FILE")
+  if [ "$current" -lt 0 ] 2>/dev/null || [ "$current" -ge "$total" ] 2>/dev/null; then
+    current=0
+  fi
 
   for i in $(seq 0 $((total - 1))); do
-    local email=$(jq -r ".accounts[$i].email // \"\"" "$ACCOUNTS_FILE")
-    local token_file=$(jq -r ".accounts[$i].token_file // \"\"" "$ACCOUNTS_FILE")
+    local email=$(jq -r --argjson i "$i" '.accounts[$i].email // ""' "$ACCOUNTS_FILE")
+    local token_file=$(jq -r --argjson i "$i" '.accounts[$i].token_file // ""' "$ACCOUNTS_FILE")
     local marker=" "
     local status="${RED}x${NC}"
 
@@ -486,8 +572,8 @@ list_accounts() {
 # Get quota reset time for account (requires agy to be run for token)
 get_quota_reset_time() {
   local account_index="$1"
-  local email=$(jq -r ".accounts[$account_index].email" "$ACCOUNTS_FILE")
-  local token_file=$(jq -r ".accounts[$account_index].token_file" "$ACCOUNTS_FILE")
+  local email=$(jq -r --argjson idx "$account_index" '.accounts[$idx].email' "$ACCOUNTS_FILE")
+  local token_file=$(jq -r --argjson idx "$account_index" '.accounts[$idx].token_file' "$ACCOUNTS_FILE")
 
   if [ ! -f "$token_file" ]; then
     echo "Not authenticated"
@@ -495,7 +581,7 @@ get_quota_reset_time() {
   fi
 
   # Check last used time from logs
-  local last_used=$(grep "Running with account $account_index" "$LOG_FILE" 2>/dev/null | tail -1 | cut -d' ' -f2-)
+  local last_used=$(grep -E "Running with account ${account_index}:" "$LOG_FILE" 2>/dev/null | tail -1 | cut -d' ' -f2-)
   if [ -z "$last_used" ]; then
     echo "Never used"
     return 1
@@ -515,8 +601,8 @@ interactive_account_selector() {
   local current=$(jq -r '.current_account // 0' "$STATE_FILE")
 
   for i in $(seq 0 $((total - 1))); do
-    local email=$(jq -r ".accounts[$i].email // \"\"" "$ACCOUNTS_FILE")
-    local token_file=$(jq -r ".accounts[$i].token_file // \"\"" "$ACCOUNTS_FILE")
+    local email=$(jq -r --argjson i "$i" '.accounts[$i].email // ""' "$ACCOUNTS_FILE")
+    local token_file=$(jq -r --argjson i "$i" '.accounts[$i].token_file // ""' "$ACCOUNTS_FILE")
     local status="${RED}x Not auth${NC}"
 
     if [ -f "$token_file" ]; then
@@ -637,7 +723,7 @@ interactive_account_selector() {
   fi
 
   # Switch to selected account
-  jq ".current_account = $selected" "$STATE_FILE" > "${STATE_FILE}.tmp"
+  jq --argjson sel "$selected" '.current_account = $sel' "$STATE_FILE" > "${STATE_FILE}.tmp"
   mv "${STATE_FILE}.tmp" "$STATE_FILE"
   apply_account_token "$selected_token"
 
@@ -672,13 +758,13 @@ switch_account() {
 
   local index=$((input_idx - 1))  # Convert to 0-based
 
-  local email=$(jq -r ".accounts[$index].email // \"\"" "$ACCOUNTS_FILE")
+  local email=$(jq -r --argjson idx "$index" '.accounts[$idx].email // ""' "$ACCOUNTS_FILE")
   if [ -z "$email" ]; then
     echo -e "${RED}Error: Account $input_idx not found${NC}"
     exit 1
   fi
 
-  local token_file=$(jq -r ".accounts[$index].token_file" "$ACCOUNTS_FILE")
+  local token_file=$(jq -r --argjson idx "$index" '.accounts[$idx].token_file' "$ACCOUNTS_FILE")
 
   if [ ! -f "$token_file" ]; then
     echo -e "${RED}Error: Account not authenticated. Run: agymod --auth $input_idx${NC}"
@@ -696,7 +782,7 @@ switch_account() {
 
   # Swap token
   apply_account_token "$token_file"
-  jq ".current_account = $index" "$STATE_FILE" > "${STATE_FILE}.tmp"
+  jq --argjson idx "$index" '.current_account = $idx' "$STATE_FILE" > "${STATE_FILE}.tmp"
   mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
   log "Switched to account $index: $email"
@@ -720,26 +806,45 @@ rotate_account() {
     # Custom sequence configured in sequence.json
     local current_pos=-1
     for i in $(seq 0 $((seq_len - 1))); do
-      local seq_idx=$(jq -r ".order[$i]" "$SEQUENCE_FILE")
+      local seq_idx=$(jq -r --argjson i "$i" '.order[$i]' "$SEQUENCE_FILE")
       if [ "$seq_idx" -eq "$current" ]; then
         current_pos=$i
         break
       fi
     done
 
+    local found=-1
+    local start_pos=0
     if [ "$current_pos" -ge 0 ]; then
-      local next_pos=$(( (current_pos + 1) % seq_len ))
-      next=$(jq -r ".order[$next_pos]" "$SEQUENCE_FILE")
+      start_pos=$(( (current_pos + 1) % seq_len ))
+    fi
+    for ((step = 0; step < seq_len; step++)); do
+      local pos=$(( (start_pos + step) % seq_len ))
+      local cand=$(jq -r --argjson p "$pos" '.order[$p]' "$SEQUENCE_FILE")
+      local cand_email=$(jq -r --argjson c "$cand" '.accounts[$c].email // ""' "$ACCOUNTS_FILE")
+      local cand_token=$(jq -r --argjson c "$cand" '.accounts[$c].token_file // ""' "$ACCOUNTS_FILE")
+      if [ -f "$cand_token" ]; then
+        local cand_tok_email
+        cand_tok_email=$(get_token_email "$cand_token" || true)
+        if [ "$cand_tok_email" = "$cand_email" ]; then
+          found=$cand
+          break
+        fi
+      fi
+    done
+
+    if [ "$found" -ge 0 ]; then
+      next=$found
     else
-      next=$(jq -r ".order[0]" "$SEQUENCE_FILE")
+      next=$(jq -r --argjson np "$start_pos" '.order[$np]' "$SEQUENCE_FILE")
     fi
   else
     # Default rotation - prioritize next authenticated and ready account
     local found=-1
     for ((step = 1; step <= total; step++)); do
       local cand=$(( (current + step) % total ))
-      local cand_email=$(jq -r ".accounts[$cand].email // \"\"" "$ACCOUNTS_FILE")
-      local cand_token=$(jq -r ".accounts[$cand].token_file // \"\"" "$ACCOUNTS_FILE")
+      local cand_email=$(jq -r --argjson c "$cand" '.accounts[$c].email // ""' "$ACCOUNTS_FILE")
+      local cand_token=$(jq -r --argjson c "$cand" '.accounts[$c].token_file // ""' "$ACCOUNTS_FILE")
       if [ -f "$cand_token" ]; then
         local cand_tok_email
         cand_tok_email=$(get_token_email "$cand_token" || true)
@@ -759,11 +864,11 @@ rotate_account() {
 
   local rotations=$(jq -r '.rotations // 0' "$STATE_FILE")
 
-  jq ".current_account = $next | .rotations = $((rotations + 1))" "$STATE_FILE" > "${STATE_FILE}.tmp"
+  jq --argjson nxt "$next" --argjson rot "$((rotations + 1))" '.current_account = $nxt | .rotations = $rot' "$STATE_FILE" > "${STATE_FILE}.tmp"
   mv "${STATE_FILE}.tmp" "$STATE_FILE"
 
   # Switch the token
-  local next_token=$(jq -r ".accounts[$next].token_file" "$ACCOUNTS_FILE")
+  local next_token=$(jq -r --argjson nxt "$next" '.accounts[$nxt].token_file' "$ACCOUNTS_FILE")
   if [ -f "$next_token" ]; then
     apply_account_token "$next_token"
   fi
@@ -774,63 +879,12 @@ rotate_account() {
 # Get current account info
 get_current_account() {
   local current=$(jq -r '.current_account // 0' "$STATE_FILE")
-  jq ".accounts[$current]" "$ACCOUNTS_FILE"
+  jq --argjson cur "$current" '.accounts[$cur]' "$ACCOUNTS_FILE"
 }
 
 # Run agy with account
 run_agy() {
-  local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
-
-  if [ "$total" -eq 0 ]; then
-    echo -e "${RED}[ERR] No accounts configured${NC}"
-    echo ""
-    echo "Setup agymod with one of your accounts:"
-    echo -e "  ${GREEN}agymod --add-account-auth your-email@gmail.com${NC}"
-    echo ""
-    show_help
-    exit 1
-  fi
-
-  local current=$(jq -r '.current_account // 0' "$STATE_FILE")
-  local email=$(jq -r ".accounts[$current].email // \"\"" "$ACCOUNTS_FILE")
-  local token_file=$(jq -r ".accounts[$current].token_file // \"\"" "$ACCOUNTS_FILE")
-
-  if [ ! -f "$token_file" ]; then
-    echo -e "${RED}[ERR] Current account not authenticated: ${CYAN}$email${NC} (Account $((current + 1)))"
-    echo ""
-    echo "Authenticate this account:"
-    echo -e "  ${GREEN}agymod --auth $((current + 1))${NC}"
-    echo ""
-    echo "Or select a ready account:"
-    echo -e "  ${GREEN}agymod --accounts${NC}"
-    echo ""
-    exit 1
-  fi
-
-  local actual_email
-  actual_email=$(get_token_email "$token_file" || true)
-  if [ -n "$actual_email" ] && [ "$actual_email" != "$email" ]; then
-    echo -e "${RED}[ERR] Token mismatch for Account $((current + 1))!${NC}"
-    echo -e "Expected account: ${CYAN}$email${NC}"
-    echo -e "Token belongs to: ${YELLOW}$actual_email${NC}"
-    echo ""
-    echo -e "${RED}Please re-authenticate this account:${NC}"
-    echo -e "  ${GREEN}agymod --auth $((current + 1))${NC}"
-    echo ""
-    echo "Or select a ready account:"
-    echo -e "  ${GREEN}agymod --accounts${NC}"
-    echo ""
-    exit 1
-  fi
-
-  # Ensure token is loaded in both file and OS keyring
-  apply_account_token "$token_file"
-
-  log "Running with account $current: $email"
-  echo -e "${BLUE}[agymod]${NC} Using account: ${CYAN}$email${NC} (${YELLOW}$((current + 1))/$total${NC})"
-  echo ""
-
-  # Parse arguments
+  # Parse arguments once
   local agy_args=()
   for arg in "$@"; do
     if [ "$arg" != "--dangerously-skip-permissions" ]; then
@@ -838,64 +892,129 @@ run_agy() {
     fi
   done
 
-  # Helper to capture any refreshed token after session
-  sync_live_token() {
-    if [ -f "$AGY_AUTH_FILE" ] && [ -s "$AGY_AUTH_FILE" ]; then
-      local live_email
-      live_email=$(get_token_email "$AGY_AUTH_FILE" || true)
-      if [ "$live_email" = "$email" ]; then
-        cp "$AGY_AUTH_FILE" "$token_file"
-        chmod 600 "$token_file" 2>/dev/null || true
-      elif [ -n "$live_email" ]; then
-        log "Warning: Live token email ($live_email) did not match expected account ($email). Refusing to overwrite token."
-      fi
+  while true; do
+    local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
+
+    if [ "$total" -eq 0 ]; then
+      echo -e "${RED}[ERR] No accounts configured${NC}"
+      echo ""
+      echo "Setup agymod with one of your accounts:"
+      echo -e "  ${GREEN}agymod --add-account-auth your-email@gmail.com${NC}"
+      echo ""
+      show_help
+      exit 1
     fi
-  }
 
-  # Run agy safely without eval (isolated from OS Keyring)
-  if [ ${#agy_args[@]} -eq 0 ]; then
-    # Interactive mode
-    exec_agy --dangerously-skip-permissions || true
-    sync_live_token
+    local current=$(jq -r '.current_account // 0' "$STATE_FILE")
+    if [ "$current" -lt 0 ] 2>/dev/null || [ "$current" -ge "$total" ] 2>/dev/null; then
+      current=0
+      jq --argjson tot "$total" '.current_account = 0 | .total_accounts = $tot' "$STATE_FILE" > "${STATE_FILE}.tmp"
+      mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    fi
+    local email=$(jq -r --argjson cur "$current" '.accounts[$cur].email // ""' "$ACCOUNTS_FILE")
+    local token_file=$(jq -r --argjson cur "$current" '.accounts[$cur].token_file // ""' "$ACCOUNTS_FILE")
 
-    # After agy exits, ask about quota (Enter = yes)
+    if [ ! -f "$token_file" ]; then
+      echo -e "${RED}[ERR] Current account not authenticated: ${CYAN}$email${NC} (Account $((current + 1)))"
+      echo ""
+      echo "Authenticate this account:"
+      echo -e "  ${GREEN}agymod --auth $((current + 1))${NC}"
+      echo ""
+      echo "Or select a ready account:"
+      echo -e "  ${GREEN}agymod --accounts${NC}"
+      echo ""
+      exit 1
+    fi
+
+    local actual_email
+    actual_email=$(get_token_email "$token_file" || true)
+    if [ -n "$actual_email" ] && [ "$actual_email" != "$email" ]; then
+      echo -e "${RED}[ERR] Token mismatch for Account $((current + 1))!${NC}"
+      echo -e "Expected account: ${CYAN}$email${NC}"
+      echo -e "Token belongs to: ${YELLOW}$actual_email${NC}"
+      echo ""
+      echo -e "${RED}Please re-authenticate this account:${NC}"
+      echo -e "  ${GREEN}agymod --auth $((current + 1))${NC}"
+      echo ""
+      echo "Or select a ready account:"
+      echo -e "  ${GREEN}agymod --accounts${NC}"
+      echo ""
+      exit 1
+    fi
+
+    # Ensure token is loaded in both file and OS keyring
+    apply_account_token "$token_file"
+
+    log "Running with account $current: $email"
+    echo -e "${BLUE}[agymod]${NC} Using account: ${CYAN}$email${NC} (${YELLOW}$((current + 1))/$total${NC})"
     echo ""
-    echo -e "${YELLOW}Did you hit quota? (Y/n)${NC}"
-    read -p "> " hit_quota
 
-    # Default to y if Enter pressed (empty input)
-    if [ -z "$hit_quota" ] || [[ "$hit_quota" =~ ^[Yy] ]]; then
-      if [ "$total" -gt 1 ]; then
-        rotate_account
-        local next=$(jq -r '.current_account' "$STATE_FILE")
-        local next_email=$(jq -r ".accounts[$next].email" "$ACCOUNTS_FILE")
-
-        echo ""
-        echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${RED}! QUOTA REACHED - AUTO-ROTATED${NC}"
-        echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo ""
-        echo -e "Previous account: ${MAGENTA}$email${NC}"
-        echo -e "New account:      ${GREEN}$next_email${NC} ($((next + 1))/$total)"
-        echo ""
-
-        # Auto-launch with next account
-        run_agy
-      else
-        echo -e "${RED}[!] Only 1 account configured. Add more accounts with --add-account-auth${NC}"
+    # Helper to capture any refreshed token after session
+    sync_live_token() {
+      if [ -f "$AGY_AUTH_FILE" ] && [ -s "$AGY_AUTH_FILE" ]; then
+        local live_email
+        live_email=$(get_token_email "$AGY_AUTH_FILE" || true)
+        if [ "$live_email" = "$email" ]; then
+          cp "$AGY_AUTH_FILE" "$token_file"
+          chmod 600 "$token_file" 2>/dev/null || true
+        elif [ -n "$live_email" ]; then
+          log "Warning: Live token email ($live_email) did not match expected account ($email). Refusing to overwrite token."
+        fi
       fi
+    }
+
+    # Run agy safely without eval (isolated from OS Keyring)
+    if [ ${#agy_args[@]} -eq 0 ]; then
+      # Interactive mode
+      exec_agy --dangerously-skip-permissions || true
+      sync_live_token
+
+      # After agy exits, ask about quota (Enter = yes)
+      echo ""
+      echo -e "${YELLOW}Did you hit quota? (Y/n)${NC}"
+      read -p "> " hit_quota
+
+      # Default to y if Enter pressed (empty input)
+      if [ -z "$hit_quota" ] || [[ "$hit_quota" =~ ^[Yy] ]]; then
+        if [ "$total" -gt 1 ]; then
+          rotate_account
+          local next=$(jq -r '.current_account' "$STATE_FILE")
+          local next_email=$(jq -r --argjson nxt "$next" '.accounts[$nxt].email' "$ACCOUNTS_FILE")
+
+          echo ""
+          echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+          echo -e "${RED}! QUOTA REACHED - AUTO-ROTATED${NC}"
+          echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+          echo ""
+          echo -e "Previous account: ${MAGENTA}$email${NC}"
+          echo -e "New account:      ${GREEN}$next_email${NC} ($((next + 1))/$total)"
+          echo ""
+
+          # Continue loop to auto-launch with next account
+          continue
+        else
+          echo -e "${RED}[!] Only 1 account configured. Add more accounts with --add-account-auth${NC}"
+          break
+        fi
+      else
+        break
+      fi
+    else
+      # Non-interactive mode with prompt
+      exec_agy --dangerously-skip-permissions "${agy_args[@]}"
+      sync_live_token
+      break
     fi
-  else
-    # Non-interactive mode with prompt
-    exec_agy --dangerously-skip-permissions "${agy_args[@]}"
-    sync_live_token
-  fi
+  done
 }
 
 # Show status
 show_status() {
   local total=$(jq '.accounts | length // 0' "$ACCOUNTS_FILE" 2>/dev/null || echo 0)
   local current=$(jq -r '.current_account // 0' "$STATE_FILE")
+  if [ "$current" -lt 0 ] 2>/dev/null || [ "$current" -ge "$total" ] 2>/dev/null; then
+    current=0
+  fi
   local rotations=$(jq -r '.rotations // 0' "$STATE_FILE")
 
   echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
@@ -979,10 +1098,7 @@ main() {
   if [[ "$1" =~ ^--[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
     local email="${1#--}"
     if account_index=$(get_account_index_by_email "$email" 2>/dev/null); then
-      jq ".current_account = $account_index" "$STATE_FILE" > "${STATE_FILE}.tmp"
-      mv "${STATE_FILE}.tmp" "$STATE_FILE"
-      log "Switched to account $account_index: $email"
-      echo -e "${GREEN}[->] Switched to: ${CYAN}$email${NC}"
+      switch_account "$((account_index + 1))"
       shift
       run_agy "$@"
       return $?
